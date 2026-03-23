@@ -60,8 +60,8 @@ all: main-build
 main-build: SquidGames.elf secondary-outputs
 
 # Tool invocations
-SquidGames.elf SquidGames.map: $(OBJS) $(USER_OBJS) /home/khush/school/EECS/eecs373/SquidGames/SquidGames/STM32L4R5ZITXP_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "SquidGames.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"/home/khush/school/EECS/eecs373/SquidGames/SquidGames/STM32L4R5ZITXP_FLASH.ld" --specs=nosys.specs -Wl,-Map="SquidGames.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -u _printf_float -Wl,--start-group -lc -lm -Wl,--end-group
+SquidGames.elf SquidGames.map: $(OBJS) $(USER_OBJS) /home/khush/school/EECS/eecs373/project/SquidGames/STM32L4R5ZITXP_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "SquidGames.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"/home/khush/school/EECS/eecs373/project/SquidGames/STM32L4R5ZITXP_FLASH.ld" --specs=nosys.specs -Wl,-Map="SquidGames.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -u _printf_float -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
