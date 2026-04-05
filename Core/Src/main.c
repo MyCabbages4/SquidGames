@@ -18,10 +18,13 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "stdio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "ili9488.h"
+#include "lvgl.h"
+#include <stdio.h>
+#include "motor_ui.h"
 
 /* USER CODE END Includes */
 
@@ -32,7 +35,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define LVGL_BUF_LINES  40  // number of rows in LVGL draw buffer
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -43,40 +46,116 @@
 /* Private variables ---------------------------------------------------------*/
 UART_HandleTypeDef hlpuart1;
 
+SPI_HandleTypeDef hspi1;
+DMA_HandleTypeDef hdma_spi1_tx;
+
 TIM_HandleTypeDef htim2;
 
 /* USER CODE BEGIN PV */
+// LVGL display buffer
+static lv_disp_draw_buf_t draw_buf;
+static lv_color_t lvgl_buf1[ILI9488_WIDTH * LVGL_BUF_LINES];
+static lv_color_t lvgl_buf2[ILI9488_WIDTH * LVGL_BUF_LINES];
 
+// DMA transfer buffer — holds RGB666 converted pixels
+// Max size: 320 pixels * 10 rows * 3 bytes = 9,600 bytes
+static uint8_t dma_buf[ILI9488_WIDTH * LVGL_BUF_LINES * 3];
+
+// Store the display driver pointer so the DMA ISR can call lv_disp_flush_ready
+static lv_disp_drv_t *disp_drv_p = NULL;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_LPUART1_UART_Init(void);
+static void MX_SPI1_Init(void);
+/* USER CODE BEGIN PFP */
+static void lvgl_display_init(void);
+static void my_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+// ---- LVGL Display Flush Callback (DMA version) ----
+// Converts RGB565 → RGB666 into a static buffer, then fires DMA.
+// Returns immediately — CPU is free while DMA streams to SPI.
+// lv_disp_flush_ready() is called from HAL_SPI_TxCpltCallback when done.
+static void my_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p) {
+    uint16_t w = area->x2 - area->x1 + 1;
+    uint16_t h = area->y2 - area->y1 + 1;
+    uint32_t total_pixels = w * h;
+
+    // Save the driver pointer for the DMA completion callback
+    disp_drv_p = drv;
+
+    // Convert all pixels from RGB565 → RGB666 into the DMA buffer
+    uint8_t *dst = dma_buf;
+    for (uint32_t i = 0; i < total_pixels; i++) {
+        uint16_t c = color_p[i].full;
+        *dst++ = (c >> 8) & 0xF8;
+        *dst++ = (c >> 3) & 0xFC;
+        *dst++ = (c << 3) & 0xF8;
+    }
+
+    // Set the address window (blocking — only a few bytes, fast)
+    ILI9488_SetWindow(area->x1, area->y1, area->x2, area->y2);
+
+    // Set DC=data, CS=low, then fire DMA
+    LCD_DC_HIGH();
+    LCD_CS_LOW();
+    HAL_SPI_Transmit_DMA(&hspi1, dma_buf, total_pixels * 3);
+
+    // DO NOT call lv_disp_flush_ready here!
+    // It will be called from HAL_SPI_TxCpltCallback when DMA finishes.
+}
+
+// ---- LVGL Display Driver Setup ----
+static void lvgl_display_init(void) {
+	lv_disp_draw_buf_init(&draw_buf, lvgl_buf1, lvgl_buf2, ILI9488_WIDTH * LVGL_BUF_LINES);
+
+    static lv_disp_drv_t disp_drv;
+    lv_disp_drv_init(&disp_drv);
+    disp_drv.hor_res  = ILI9488_WIDTH;    // 320
+    disp_drv.ver_res  = ILI9488_HEIGHT;   // 480
+    disp_drv.flush_cb = my_flush_cb;
+    disp_drv.draw_buf = &draw_buf;
+    lv_disp_drv_register(&disp_drv);
+}
+
+// ---- Encoder callback ----
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
-	static int16_t counter = 0;
-	static int16_t count = 0;
+    static int16_t counter = 0;
+    static int16_t count = 0;
 
-	counter = __HAL_TIM_GET_COUNTER(&htim2);
-	count = counter/4;
+    counter = __HAL_TIM_GET_COUNTER(&htim2);
+    count = counter / 4;
 
-	// For a 20 PPR encoder
-	float revolutions = count / 80.0f;
-	float degrees = count / 80.0f * 360.0f;
-	int deg = (int)degrees % 360;
+    float revolutions = count / 80.0f;
+    float degrees = count / 80.0f * 360.0f;
+    int deg = (int)degrees % 360;
 
-	if (deg < 0) {
-		deg = 360 + deg;
-	}
+    if (deg < 0) {
+        deg = 360 + deg;
+    }
 
-	printf("Revolutions: %.2f, Degrees: %d\n\r", revolutions, deg);
+    printf("Revolutions: %.2f, Degrees: %d\n\r", revolutions, deg);
+}
+
+// ---- DMA Transfer Complete Callback ----
+// Called by HAL from the DMA interrupt when SPI TX finishes.
+void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi) {
+    if (hspi->Instance == SPI1) {
+        LCD_CS_HIGH();  // deselect the display
+
+        if (disp_drv_p != NULL) {
+            lv_disp_flush_ready(disp_drv_p);  // tell LVGL: ready for next flush
+        }
+    }
 }
 /* USER CODE END 0 */
 
@@ -109,10 +188,57 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_TIM2_Init();
   MX_LPUART1_UART_Init();
+  MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
+  // 1. Init the LCD hardware
+    ILI9488_Init(&hspi1);
 
+    // 2. Init LVGL core
+    lv_init();
+
+    // 3. Register the display driver
+    lvgl_display_init();
+
+    // 4. Create a simple test UI
+//    // -- Background color
+//    lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x003366), LV_PART_MAIN);
+//
+//    // -- "Hello" label centered on screen
+//    lv_obj_t *label = lv_label_create(lv_scr_act());
+//    lv_label_set_text(label, "Hello from LVGL!");
+//    lv_obj_set_style_text_color(label, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+//    lv_obj_set_style_text_font(label, &lv_font_montserrat_14, LV_PART_MAIN);
+//    lv_obj_align(label, LV_ALIGN_CENTER, 0, -40);
+//
+//    // -- A counter label that updates every loop iteration
+//    lv_obj_t *counter_label = lv_label_create(lv_scr_act());
+//    lv_label_set_text(counter_label, "Count: 0");
+//    lv_obj_set_style_text_color(counter_label, lv_color_hex(0x00FF00), LV_PART_MAIN);
+//    lv_obj_set_style_text_font(counter_label, &lv_font_montserrat_14, LV_PART_MAIN);
+//    lv_obj_align(counter_label, LV_ALIGN_CENTER, 0, 40);
+
+
+    // Set a dark background
+	lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x0D1117), LV_PART_MAIN);
+
+	// Title
+	lv_obj_t *title = lv_label_create(lv_scr_act());
+	lv_label_set_text(title, "Motor Status");
+	lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+	lv_obj_set_style_text_font(title, &lv_font_montserrat_14, LV_PART_MAIN);
+	lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+
+	// Create 3 motor bars, stacked vertically
+	motor_bar_t motor1, motor2, motor3;
+	motor_bar_create(&motor1, lv_scr_act(), "Motor 1", 20, 40);
+	motor_bar_create(&motor2, lv_scr_act(), "Motor 2", 20, 110);
+	motor_bar_create(&motor3, lv_scr_act(), "Motor 3", 20, 180);
+
+    uint32_t counter_val = 0;
+    uint32_t last_update = 0;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -122,6 +248,30 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	  // Let LVGL process rendering, animations, etc.
+	  lv_timer_handler();
+
+	  // Update the counter label once per second to demonstrate partial refresh
+//	  if (HAL_GetTick() - last_update >= 1000) {
+//		  last_update = HAL_GetTick();
+//		  counter_val++;
+//		  lv_label_set_text_fmt(counter_label, "Count: %lu", counter_val);
+//	  }
+//
+//	  HAL_Delay(5);
+
+	// SIMULATED — replace with actual ADC reads
+	// e.g. float v1 = read_motor_voltage(1);
+	static float sim_voltage = 0.0f;
+	sim_voltage += 0.05f;
+	if (sim_voltage > 12.0f) sim_voltage = 0.0f;
+
+	motor_bar_set_voltage(&motor1, sim_voltage);
+	motor_bar_set_voltage(&motor2, sim_voltage * 0.8f);
+	motor_bar_set_voltage(&motor3, sim_voltage * 0.6f);
+
+	HAL_Delay(5);
+
   }
   /* USER CODE END 3 */
 }
@@ -149,7 +299,13 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.MSIState = RCC_MSI_ON;
   RCC_OscInitStruct.MSICalibrationValue = 0;
   RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_6;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_MSI;
+  RCC_OscInitStruct.PLL.PLLM = 1;
+  RCC_OscInitStruct.PLL.PLLN = 40;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+  RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV2;
+  RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV2;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -159,12 +315,12 @@ void SystemClock_Config(void)
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_MSI;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_3) != HAL_OK)
   {
     Error_Handler();
   }
@@ -219,6 +375,46 @@ static void MX_LPUART1_UART_Init(void)
 }
 
 /**
+  * @brief SPI1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SPI1_Init(void)
+{
+
+  /* USER CODE BEGIN SPI1_Init 0 */
+
+  /* USER CODE END SPI1_Init 0 */
+
+  /* USER CODE BEGIN SPI1_Init 1 */
+
+  /* USER CODE END SPI1_Init 1 */
+  /* SPI1 parameter configuration*/
+  hspi1.Instance = SPI1;
+  hspi1.Init.Mode = SPI_MODE_MASTER;
+  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi1.Init.NSS = SPI_NSS_SOFT;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_4;
+  hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi1.Init.CRCPolynomial = 7;
+  hspi1.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
+  hspi1.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
+  if (HAL_SPI_Init(&hspi1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN SPI1_Init 2 */
+
+  /* USER CODE END SPI1_Init 2 */
+
+}
+
+/**
   * @brief TIM2 Initialization Function
   * @param None
   * @retval None
@@ -268,6 +464,23 @@ static void MX_TIM2_Init(void)
 }
 
 /**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMAMUX1_CLK_ENABLE();
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Channel1_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -289,6 +502,9 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_GPIOG_CLK_ENABLE();
   HAL_PWREx_EnableVddIO2();
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOF, LCD_CS_Pin|LCD_DC_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pins : PE2 PE3 */
   GPIO_InitStruct.Pin = GPIO_PIN_2|GPIO_PIN_3;
@@ -328,14 +544,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PA4 PA5 PA6 PA7 */
-  GPIO_InitStruct.Pin = GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-  GPIO_InitStruct.Alternate = GPIO_AF5_SPI1;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
   /*Configure GPIO pin : PB0 */
   GPIO_InitStruct.Pin = GPIO_PIN_0;
   GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
@@ -355,6 +563,13 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : LCD_CS_Pin LCD_DC_Pin */
+  GPIO_InitStruct.Pin = LCD_CS_Pin|LCD_DC_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PE7 PE8 PE9 PE10
                            PE11 PE12 PE13 */

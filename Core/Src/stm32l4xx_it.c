@@ -20,9 +20,9 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "stm32l4xx_it.h"
-#include "stdio.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "lvgl.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -56,6 +56,8 @@
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
+extern DMA_HandleTypeDef hdma_spi1_tx;
+extern SPI_HandleTypeDef hspi1;
 extern TIM_HandleTypeDef htim2;
 /* USER CODE BEGIN EV */
 
@@ -184,6 +186,7 @@ void PendSV_Handler(void)
 void SysTick_Handler(void)
 {
   /* USER CODE BEGIN SysTick_IRQn 0 */
+  lv_tick_inc(1);
 
   /* USER CODE END SysTick_IRQn 0 */
   HAL_IncTick();
@@ -200,6 +203,20 @@ void SysTick_Handler(void)
 /******************************************************************************/
 
 /**
+  * @brief This function handles DMA1 channel1 global interrupt.
+  */
+void DMA1_Channel1_IRQHandler(void)
+{
+  /* USER CODE BEGIN DMA1_Channel1_IRQn 0 */
+
+  /* USER CODE END DMA1_Channel1_IRQn 0 */
+  HAL_DMA_IRQHandler(&hdma_spi1_tx);
+  /* USER CODE BEGIN DMA1_Channel1_IRQn 1 */
+
+  /* USER CODE END DMA1_Channel1_IRQn 1 */
+}
+
+/**
   * @brief This function handles TIM2 global interrupt.
   */
 void TIM2_IRQHandler(void)
@@ -211,6 +228,20 @@ void TIM2_IRQHandler(void)
   /* USER CODE BEGIN TIM2_IRQn 1 */
 
   /* USER CODE END TIM2_IRQn 1 */
+}
+
+/**
+  * @brief This function handles SPI1 global interrupt.
+  */
+void SPI1_IRQHandler(void)
+{
+  /* USER CODE BEGIN SPI1_IRQn 0 */
+
+  /* USER CODE END SPI1_IRQn 0 */
+  HAL_SPI_IRQHandler(&hspi1);
+  /* USER CODE BEGIN SPI1_IRQn 1 */
+
+  /* USER CODE END SPI1_IRQn 1 */
 }
 
 /* USER CODE BEGIN 1 */
