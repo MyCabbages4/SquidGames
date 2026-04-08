@@ -26,7 +26,7 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef PID struct {
+typedef struct {
 	float kp = 0.001f;
 	float ki;
 	float kd;
@@ -34,13 +34,14 @@ typedef PID struct {
 	float prev_error;
 	float output;
 	float integral_max;
-};
+} PID;
 
-typedef Motor struct {
+typedef struct {
 	PID gains;
 	int32_t encoder_count;
-	float revolutions;
-};
+	uint32_t pos_ch;
+	uint32_t neg_ch;
+} Motor;
 
 /* USER CODE END PTD */
 
@@ -69,6 +70,8 @@ volatile int32_t encoder_count = 0;
 volatile float revolutions = 0;
 volatile float degrees = 0;
 volatile int deg = 0;
+Motor motor_1;
+Motor motor_2;
 
 /* USER CODE END PV */
 
@@ -81,6 +84,7 @@ static void MX_TIM4_Init(void);
 static void MX_TIM3_Init(void);
 void set_pwm(float);
 void pid_init(PID*);
+void update_motor(Motor, float);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -88,22 +92,52 @@ void pid_init(PID*);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
-	encoder_count = __HAL_TIM_GET_COUNTER(&htim2);
-
-	revolutions = encoder_count / CPR;
-	degrees = encoder_count / CPR * 360.0f;
-	deg = ((int)degrees % 360 + 360) % 360; // Convert to degrees, correct for negative
+	motor_1.encoder_count = __HAL_TIM_GET_COUNTER(&htim2);
+	motor_2.encoder_count = __HAL_TIM_GET_COUNTER(&htim3);
 }
 
-void set_pwm(float duty_cycle_percent) {
+void set_pwm(Motor m, float duty_cycle_percent) {
 	int duty_cycle = (int)(duty_cycle_percent * 200);
 	if (duty_cycle < 0) {
-		__HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0);
-		__HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, -duty_cycle);
+		__HAL_TIM_SET_COMPARE(&htim4, m.pos_ch, 0);
+		__HAL_TIM_SET_COMPARE(&htim4, m.neg_ch, -duty_cycle);
 	} else {
-		__HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, duty_cycle);
-		__HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, 0);
+		__HAL_TIM_SET_COMPARE(&htim4, m.pos_ch, duty_cycle);
+		__HAL_TIM_SET_COMPARE(&htim4, m.neg_ch, 0);
 	}
+}
+
+void update_motor(Motor *m, float set_point) {
+	float revolutions = (float)m.encoder_count / CPR;
+	float degrees = revolutions * 360.0f;
+	float error = set_point - degrees;
+
+	// Update PID
+	float P = m->kp * error;
+	m->integral += error / 100.0f;
+	// TODO: anti-windup
+	float I = m->ki * m->integral;
+	float D = m->kd * (error - m->prev_error) / 100.0f;
+	m->prev_error = error;
+
+	float output = P + I + D;
+	if (output < -1) {
+		output = -1.0f;
+	}
+
+	if (output < -0.05f && output > -0.2f) {
+		output = -0.2f;
+	}
+
+	if (output > 0.05f && output < 0.2f) {
+		output = 0.2f;
+	}
+
+	if (output > 1.0f) {
+		output = 1.0f;
+	}
+
+	set_pwm(output);
 }
 
 /* USER CODE END 0 */
@@ -151,21 +185,21 @@ int main(void)
   __HAL_TIM_SET_COUNTER(&htim4, 0);
   HAL_TIM_Encoder_Start_IT(&htim2, TIM_CHANNEL_ALL);
   HAL_TIM_Encoder_Start_IT(&htim4, TIM_CHANNEL_ALL);
-
+  // Initialize motors
+  motor_1.pos_ch = TIM_CHANNEL_1;
+  motor_1.neg_ch = TIM_CHANNEL_2;
+  motor_2.pos_ch = TIM_CHANNEL_3;
+  motor_2.neg_ch = TIM_CHANNEL_4;
+  motor_1.PID.K_P = 0.01f;
   // PID stuff
   float set_point = 0.0f;
 //  printf("Enter a set point for the motor to go to in degrees \n\r");
 //  scanf("%f", set_point);
   set_point = 15.f;
-  float counter_target = (set_point / 360.0f) * CPR;
+//  float counter_target = (set_point / 360.0f) * CPR;
 //  printf("Motor will go to %.2f degrees, which correlates to %.2f rotations\n\r", set_point, counter_target)
   // Tuning parameters:
-  PID motor_1;
-  motor_1.K_P = 0.01f;
-  PID motor_2;
 
-  float integral = 0.0f;
-  float prev_error = 0.0f;
   float delay = 1.0f;
   /* USER CODE END 2 */
 
@@ -176,40 +210,9 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    float error = set_point - deg;
-    printf("Error:%.2f,Degrees:%d,", error, deg);
+	update_motor(motor_1, set_point);
+	update_motor(motor_2, set_point);
 
-    float P = K_P * error;
-
-    integral += error * (delay / 1000.0f); // Delay in seconds
-    float I = K_I * integral;
-
-
-    float derivative = (error - prev_error) / (delay / 1000.0f);
-    prev_error = error;
-    float D = K_D * derivative;
-
-    float output = P + I + D;
-//    printf("P: %.2f\n I: %.2f\n D: %.2f\n Error: %.2f\n, Output: %.2f\n");
-    // Clamp output for pwm (can't have 6767% duty cycle)
-    if (output < -1) {
-    	output = -1.0f;
-    }
-
-    if (output < -0.05f && output > -0.2f) {
-    	output = -0.2f;
-    }
-
-    if (output > 0.05f && output < 0.2f) {
-    	output = 0.2f;
-    }
-
-    if (output > 1.0f) {
-    	output = 1.0f;
-    }
-
-    printf("Output:%.2f\n\r", output);
-    set_pwm(output);
     HAL_Delay((int)delay);
   }
   /* USER CODE END 3 */
