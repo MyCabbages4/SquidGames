@@ -27,7 +27,7 @@
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 typedef struct {
-	float kp = 0.001f;
+	float kp;
 	float ki;
 	float kd;
 	float integral;
@@ -82,9 +82,9 @@ static void MX_TIM2_Init(void);
 static void MX_LPUART1_UART_Init(void);
 static void MX_TIM4_Init(void);
 static void MX_TIM3_Init(void);
-void set_pwm(float);
+void set_pwm(Motor*, float);
 void pid_init(PID*);
-void update_motor(Motor, float);
+void update_motor(Motor*, float);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -92,35 +92,44 @@ void update_motor(Motor, float);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
-	motor_1.encoder_count = __HAL_TIM_GET_COUNTER(&htim2);
-	motor_2.encoder_count = __HAL_TIM_GET_COUNTER(&htim3);
+	motor_1.encoder_count = __HAL_TIM_GET_COUNTER(&htim3);
+	motor_2.encoder_count = __HAL_TIM_GET_COUNTER(&htim2);
+
+//	printf("Motor 1 encoder count: %d\r\n", motor_1.encoder_count);
+//	printf("Motor 2 encoder count: %d\r\n", motor_2.encoder_count);
 }
 
-void set_pwm(Motor m, float duty_cycle_percent) {
+void set_pwm(Motor* m, float duty_cycle_percent) {
 	int duty_cycle = (int)(duty_cycle_percent * 200);
+//	printf("Setting duty cycle to: %.2f\n\r", duty_cycle);
+//	printf(",duty_cycle:%d", duty_cycle);
+//	printf(",pos_ch:%d,neg_ch:%d\n\r", m->pos_ch, m->neg_ch);
 	if (duty_cycle < 0) {
-		__HAL_TIM_SET_COMPARE(&htim4, m.pos_ch, 0);
-		__HAL_TIM_SET_COMPARE(&htim4, m.neg_ch, -duty_cycle);
+		__HAL_TIM_SET_COMPARE(&htim4, m->pos_ch, 0);
+		__HAL_TIM_SET_COMPARE(&htim4, m->neg_ch, -duty_cycle);
 	} else {
-		__HAL_TIM_SET_COMPARE(&htim4, m.pos_ch, duty_cycle);
-		__HAL_TIM_SET_COMPARE(&htim4, m.neg_ch, 0);
+		__HAL_TIM_SET_COMPARE(&htim4, m->pos_ch, duty_cycle);
+		__HAL_TIM_SET_COMPARE(&htim4, m->neg_ch, 0);
 	}
 }
 
-void update_motor(Motor *m, float set_point) {
-	float revolutions = (float)m.encoder_count / CPR;
+void update_motor(Motor* m, float set_point) {
+	float revolutions = (float)m->encoder_count / CPR;
 	float degrees = revolutions * 360.0f;
 	float error = set_point - degrees;
+//	printf("Error: %.2f\n\r", error);
 
 	// Update PID
-	float P = m->kp * error;
-	m->integral += error / 100.0f;
+	float P = m->gains.kp * error;
+//	printf("P: %.2f\n\r", P);
+	m->gains.integral += error / 100.0f;
 	// TODO: anti-windup
-	float I = m->ki * m->integral;
-	float D = m->kd * (error - m->prev_error) / 100.0f;
-	m->prev_error = error;
+	float I = m->gains.ki * m->gains.integral;
+	float D = m->gains.kd * (error - m->gains.prev_error) / 100.0f;
+	m->gains.prev_error = error;
 
 	float output = P + I + D;
+//	printf("Output: %.4f\n\r", output);
 	if (output < -1) {
 		output = -1.0f;
 	}
@@ -137,7 +146,9 @@ void update_motor(Motor *m, float set_point) {
 		output = 1.0f;
 	}
 
-	set_pwm(output);
+//	printf("Output:%.2f,P:%.4f\n\r", output, P);
+
+	set_pwm(m, output);
 }
 
 /* USER CODE END 0 */
@@ -190,28 +201,30 @@ int main(void)
   motor_1.neg_ch = TIM_CHANNEL_2;
   motor_2.pos_ch = TIM_CHANNEL_3;
   motor_2.neg_ch = TIM_CHANNEL_4;
-  motor_1.PID.K_P = 0.01f;
+  motor_2.gains.kp = 0.01f;
+  motor_1.gains.kp = 0.01f;
   // PID stuff
   float set_point = 0.0f;
 //  printf("Enter a set point for the motor to go to in degrees \n\r");
 //  scanf("%f", set_point);
-  set_point = 15.f;
+  set_point = 90.f;
 //  float counter_target = (set_point / 360.0f) * CPR;
 //  printf("Motor will go to %.2f degrees, which correlates to %.2f rotations\n\r", set_point, counter_target)
   // Tuning parameters:
 
-  float delay = 1.0f;
+  float delay = 10.0f;
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  printf("Hello world\n\r");
   while (1)
   {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	update_motor(motor_1, set_point);
-	update_motor(motor_2, set_point);
+	update_motor(&motor_2, set_point);
+	update_motor(&motor_1, set_point);
 
     HAL_Delay((int)delay);
   }
