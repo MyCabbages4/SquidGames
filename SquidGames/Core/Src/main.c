@@ -114,8 +114,8 @@ void update_motor(Motor* m, float set_point) {
 	float revolutions = (float)m->encoder_count / CPR;
 	float degrees = revolutions * 360.0f;
 	float error = set_point - degrees;
-	printf("Error%d:%.2f ", m->id, error);
-	printf("Pos%d:%.2f\n\r", m->id, degrees);
+//	printf("Error%d:%.2f ", m->id, error);
+//	printf("Pos%d:%.2f\n\r", m->id, degrees);
 
 	// Update PID
 	float P = m->gains.kp * error;
