@@ -55,5 +55,5 @@ void motor_bar_set_voltage(motor_bar_t *mb, float voltage) {
     lv_bar_set_value(mb->bar, (int32_t)(voltage * 10), LV_ANIM_OFF);
     int whole = (int)voltage;
 	int frac  = ((int)(voltage * 10)) % 10;
-	lv_label_set_text_fmt(mb->value_label, "%d.%d Volts", whole, frac);
+	lv_label_set_text_fmt(mb->value_label, "%d.%d Volts	", whole, frac);
 }
