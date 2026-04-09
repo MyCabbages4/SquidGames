@@ -25,6 +25,7 @@
 #include "lvgl.h"
 #include <stdio.h>
 #include "motor_ui.h"
+#include <math.h>
 
 /* USER CODE END Includes */
 
@@ -63,6 +64,7 @@ static uint8_t dma_buf[ILI9488_WIDTH * LVGL_BUF_LINES * 3];
 
 // Store the display driver pointer so the DMA ISR can call lv_disp_flush_ready
 static lv_disp_drv_t *disp_drv_p = NULL;
+lv_disp_t * g_disp_p;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -122,9 +124,11 @@ static void lvgl_display_init(void) {
     lv_disp_drv_init(&disp_drv);
     disp_drv.hor_res  = ILI9488_WIDTH;    // 320
     disp_drv.ver_res  = ILI9488_HEIGHT;   // 480
+
     disp_drv.flush_cb = my_flush_cb;
     disp_drv.draw_buf = &draw_buf;
-    lv_disp_drv_register(&disp_drv);
+    g_disp_p = lv_disp_drv_register(&disp_drv);
+//    lv_disp_set_rotation(g_disp_p, LV_DISP_ROT_90);
 }
 
 // ---- Encoder callback ----
@@ -232,10 +236,10 @@ int main(void)
 	lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
 
 	// Create 3 motor bars, stacked vertically
-	motor_bar_t motor1, motor2, motor3;
+	motor_bar_t motor1, motor2;//, motor3;
 	motor_bar_create(&motor1, lv_scr_act(), "Motor 1", 20, 40);
 	motor_bar_create(&motor2, lv_scr_act(), "Motor 2", 20, 110);
-	motor_bar_create(&motor3, lv_scr_act(), "Motor 3", 20, 180);
+//	motor_bar_create(&motor3, lv_scr_act(), "Motor 3", 20, 180);
 
     uint32_t counter_val = 0;
     uint32_t last_update = 0;
@@ -263,12 +267,12 @@ int main(void)
 	// SIMULATED — replace with actual ADC reads
 	// e.g. float v1 = read_motor_voltage(1);
 	static float sim_voltage = 0.0f;
-	sim_voltage += 0.05f;
-	if (sim_voltage > 12.0f) sim_voltage = 0.0f;
+	sim_voltage += 0.1f;
+//	if (sim_voltage > 12.0f) sim_voltage = 0.0f;
 
-	motor_bar_set_voltage(&motor1, sim_voltage);
-	motor_bar_set_voltage(&motor2, sim_voltage * 0.8f);
-	motor_bar_set_voltage(&motor3, sim_voltage * 0.6f);
+	motor_bar_set_voltage(&motor1, 12 * sin(sim_voltage));
+	motor_bar_set_voltage(&motor2, 12 * cos(sim_voltage));
+//	motor_bar_set_voltage(&motor3, sim_voltage * 0.6f);
 
 	HAL_Delay(5);
 

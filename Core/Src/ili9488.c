@@ -47,10 +47,6 @@ void ILI9488_Init(SPI_HandleTypeDef *hspi) {
     LCD_SendCommand(ILI9488_COLMOD);
     LCD_SendData8(0x66);
 
-    // Memory Access Control
-    LCD_SendCommand(ILI9488_MADCTL);
-    LCD_SendData8(0x48);
-
     // Power Control 1
     LCD_WriteReg(0xC0, (uint8_t[]){0x17, 0x15}, 2);
 
@@ -85,6 +81,12 @@ void ILI9488_Init(SPI_HandleTypeDef *hspi) {
         0x05, 0x32, 0x45, 0x46, 0x04,
         0x0E, 0x0D, 0x35, 0x37, 0x0F
     }, 15);
+
+
+    // Memory Access Control
+    LCD_SendCommand(ILI9488_MADCTL);
+//    LCD_SendData8(0x48); // portrait
+    LCD_SendData8(0xE8); // landscape
 
     // Display ON
     LCD_SendCommand(ILI9488_DISPON);

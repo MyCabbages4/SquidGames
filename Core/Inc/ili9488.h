@@ -16,8 +16,12 @@
 #define LCD_DC_HIGH()  HAL_GPIO_WritePin(LCD_DC_PORT, LCD_DC_PIN, GPIO_PIN_SET)
 
 // ------ Display Dimensions ------
-#define ILI9488_WIDTH   320
-#define ILI9488_HEIGHT  480
+// portrait
+//#define ILI9488_WIDTH   320
+//#define ILI9488_HEIGHT  480
+// landscape
+#define ILI9488_WIDTH   480
+#define ILI9488_HEIGHT  320
 
 // ------ ILI9488 Commands ------
 #define ILI9488_NOP       0x00
