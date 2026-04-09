@@ -90,8 +90,8 @@ static void MX_TIM1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
-	motor_1.encoder_count = __HAL_TIM_GET_COUNTER(&htim1);
 	motor_2.encoder_count = __HAL_TIM_GET_COUNTER(&htim2);
+	motor_1.encoder_count = __HAL_TIM_GET_COUNTER(&htim1);
 
 //	printf("Count%d:%ld Count%d:%ld\r\n", motor_1.id, motor_1.encoder_count, motor_2.id, motor_2.encoder_count);
 }
@@ -149,7 +149,8 @@ void update_motor(Motor* m, float set_point) {
 	set_pwm(m, output);
 }
 void tune_motor_1() {
-	  motor_1.gains.kp = 0.001f;
+	  motor_1.gains.kp = 0.0048f;
+	  motor_1.gains.ki = 0.01f;
 }
 void tune_motor_2() {
 	  motor_2.gains.kp = 0.0041f;
@@ -233,6 +234,8 @@ int main(void)
 	update_motor(&motor_2, set_point);
 	update_motor(&motor_1, set_point);
 
+//	set_pwm(&motor_1, -0.2);
+//	set_pwm(&motor_2, -0.2);
     HAL_Delay((int)delay);
   }
   /* USER CODE END 3 */
@@ -355,7 +358,7 @@ static void MX_TIM1_Init(void)
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  sConfig.EncoderMode = TIM_ENCODERMODE_TI1;
+  sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
   sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
   sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
