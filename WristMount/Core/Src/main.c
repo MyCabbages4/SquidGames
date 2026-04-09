@@ -18,11 +18,11 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "stdio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "stdio.h"
+#include "math.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -43,7 +43,8 @@
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
 
-UART_HandleTypeDef huart2;
+UART_HandleTypeDef hlpuart1;
+UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
 
@@ -53,15 +54,23 @@ UART_HandleTypeDef huart2;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_I2C1_Init(void);
-static void MX_USART2_UART_Init(void);
+static void MX_USART1_UART_Init(void);
+static void MX_LPUART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-uint8_t gyroAddr = 0x28;
-uint8_t buffer[3];
+uint8_t gyroAddr = 0x28 << 1;
+uint8_t buffer[6];
+int16_t X_Offset;
+int16_t Y_Offset;
+int16_t Z_Offset;
+int16_t X;
+int16_t Y;
+int16_t Z;
+
 /* USER CODE END 0 */
 
 /**
@@ -94,55 +103,72 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_I2C1_Init();
-  MX_USART2_UART_Init();
+  MX_USART1_UART_Init();
+  MX_LPUART1_UART_Init();
   /* USER CODE BEGIN 2 */
 
-  // Configure Gyroscope
+  // Configure Accelerometer
+  *buffer = 0x07; // Page ID
+  *(buffer + 1) = 0x00; // Page 0x00
+  HAL_I2C_Master_Transmit(&hi2c1, gyroAddr, buffer, 2, HAL_MAX_DELAY);
+
+  *buffer = 0x3D; // OPR_MODE
+  *(buffer + 1) = 0b00010000; // Set to Config Mode
+  HAL_I2C_Master_Transmit(&hi2c1, gyroAddr, buffer, 2, HAL_MAX_DELAY);
+
   *buffer = 0x07; // Page ID
   *(buffer + 1) = 0x01; // Page 0x01
-  HAL_I2C_Master_Transmit(&hi2c1, (gyroAddr << 1), buffer, 2, HAL_MAX_DELAY);
-  *buffer = 0x0A; // GYR_Config_0 0x0A
-  *(buffer + 1) = 0b00111011;
-  HAL_I2C_Master_Transmit(&hi2c1, (gyroAddr << 1), buffer, 2, HAL_MAX_DELAY);
-  *buffer = 0x0B; // GYR_Config_1 0x0B
-  *(buffer + 1) = 0x00;
-  HAL_I2C_Master_Transmit(&hi2c1, (gyroAddr << 1), buffer, 2, HAL_MAX_DELAY);
+  HAL_I2C_Master_Transmit(&hi2c1, gyroAddr, buffer, 2, HAL_MAX_DELAY);
+
+  *buffer = 0x08; // ACC_CONFIG
+  *(buffer + 1) = 0b00010000;
+  HAL_I2C_Master_Transmit(&hi2c1, gyroAddr, buffer, 2, HAL_MAX_DELAY);
+
   *buffer = 0x07; // Page ID
-  *(buffer + 1) = 0x01; // Page 0x00
-  HAL_I2C_Master_Transmit(&hi2c1, (gyroAddr << 1), buffer, 2, HAL_MAX_DELAY);
-  HAL_Delay(500); // Average time for gyroscope to calibrate
+  *(buffer + 1) = 0x00; // Page 0x00
+  HAL_I2C_Master_Transmit(&hi2c1, gyroAddr, buffer, 2, HAL_MAX_DELAY);
+
+  *buffer = 0x3B; // UNIT_SEL
+  *(buffer + 1) = 0b10000001; // Set ACC units to mg
+  HAL_I2C_Master_Transmit(&hi2c1, gyroAddr, buffer, 2, HAL_MAX_DELAY);
+
+  *buffer = 0x3D; // OPR_MODE
+  *(buffer + 1) = 0b00011000; // Set to IMU
+  HAL_I2C_Master_Transmit(&hi2c1, gyroAddr, buffer, 2, HAL_MAX_DELAY);
+
+  *buffer = 0x3E; // PWR_MODE
+  *(buffer + 1) = 0x00; // Normal MOde
+  HAL_I2C_Master_Transmit(&hi2c1, gyroAddr, buffer, 2, HAL_MAX_DELAY);
+
+  // Obtain Acc Offsets
+  HAL_Delay(500); // Time to calibrate if needed
+  *buffer = 0x55; // Start of ACC X, Y, Z offset data
+  HAL_I2C_Master_Transmit(&hi2c1, gyroAddr, buffer, 1, HAL_MAX_DELAY);
+  HAL_I2C_Master_Receive(&hi2c1, gyroAddr, buffer, 6, HAL_MAX_DELAY);
+
+  X_Offset = *buffer | (*(buffer + 1) << 8);
+  Y_Offset = *(buffer + 2) | (*(buffer + 3) << 8);
+  Z_Offset = *(buffer + 4) | (*(buffer + 5) << 8);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	printf("Test?\r\n");
-	*buffer = 0x61; // LSB X
-	HAL_I2C_Master_Transmit(&hi2c1, (gyroAddr << 1), buffer, 1, HAL_MAX_DELAY);
-	HAL_I2C_Master_Receive(&hi2c1, (gyroAddr << 1), buffer, 1, HAL_MAX_DELAY);
-	printf("LSB X: %d\r\n", *buffer);
-	*buffer = 0x62; // MSB X
-	HAL_I2C_Master_Transmit(&hi2c1, (gyroAddr << 1), buffer, 1, HAL_MAX_DELAY);
-	HAL_I2C_Master_Receive(&hi2c1, (gyroAddr << 1), buffer, 1, HAL_MAX_DELAY);
-	printf("MSB X: %d\r\n", *buffer);
-	*buffer = 0x63; // LSB Y
-	HAL_I2C_Master_Transmit(&hi2c1, (gyroAddr << 1), buffer, 1, HAL_MAX_DELAY);
-	HAL_I2C_Master_Receive(&hi2c1, (gyroAddr << 1), buffer, 1, HAL_MAX_DELAY);
-	printf("LSB Y: %d\r\n", *buffer);
-	*buffer = 0x64; // MSB Y
-	HAL_I2C_Master_Transmit(&hi2c1, (gyroAddr << 1), buffer, 1, HAL_MAX_DELAY);
-	HAL_I2C_Master_Receive(&hi2c1, (gyroAddr << 1), buffer, 1, HAL_MAX_DELAY);
-	printf("MSB Y: %d\r\n", *buffer);
-	*buffer = 0x65; // LSB Z
-	HAL_I2C_Master_Transmit(&hi2c1, (gyroAddr << 1), buffer, 1, HAL_MAX_DELAY);
-	HAL_I2C_Master_Receive(&hi2c1, (gyroAddr << 1), buffer, 1, HAL_MAX_DELAY);
-	printf("LSB Z: %d\r\n", *buffer);
-	*buffer = 0x66; // MSB Z
-	HAL_I2C_Master_Transmit(&hi2c1, (gyroAddr << 1), buffer, 1, HAL_MAX_DELAY);
-	HAL_I2C_Master_Receive(&hi2c1, (gyroAddr << 1), buffer, 1, HAL_MAX_DELAY);
-	printf("MSB Z: %d\r\n", *buffer);
-	HAL_Delay(500);
+	*buffer = 0x08; // Start of ACC X, Y, Z data
+	HAL_I2C_Master_Transmit(&hi2c1, gyroAddr, buffer, 1, HAL_MAX_DELAY);
+	HAL_I2C_Master_Receive(&hi2c1, gyroAddr, buffer, 6, HAL_MAX_DELAY);
+
+	X = *buffer | (*(buffer + 1) << 8);
+	Y = *(buffer + 2) | (*(buffer + 3) << 8);
+	Z = *(buffer + 4) | (*(buffer + 5) << 8);
+
+	float angle = (180.0/M_PI) * atan2(X, Z);
+
+	printf("angle: %.2f, X: %d, Y: %d, Z: %d\r\n", *angle, X + X_Offset,Y + Y_Offset,Z + Z_Offset);
+	HAL_UART_Transmit(&huart1, &angle, sizeof(angle), 10);
+//	printf("angle: %.2f\r\n", angle);
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -166,10 +192,16 @@ void SystemClock_Config(void)
     Error_Handler();
   }
 
+  /** Configure LSE Drive Capability
+  */
+  HAL_PWR_EnableBkUpAccess();
+  __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_LOW);
+
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_MSI;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSE|RCC_OSCILLATORTYPE_MSI;
+  RCC_OscInitStruct.LSEState = RCC_LSE_ON;
   RCC_OscInitStruct.MSIState = RCC_MSI_ON;
   RCC_OscInitStruct.MSICalibrationValue = 0;
   RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_10;
@@ -192,6 +224,10 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+
+  /** Enable MSI Auto calibration
+  */
+  HAL_RCCEx_EnableMSIPLLMode();
 }
 
 /**
@@ -243,37 +279,71 @@ static void MX_I2C1_Init(void)
 }
 
 /**
-  * @brief USART2 Initialization Function
+  * @brief LPUART1 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_USART2_UART_Init(void)
+static void MX_LPUART1_UART_Init(void)
 {
 
-  /* USER CODE BEGIN USART2_Init 0 */
+  /* USER CODE BEGIN LPUART1_Init 0 */
 
-  /* USER CODE END USART2_Init 0 */
+  /* USER CODE END LPUART1_Init 0 */
 
-  /* USER CODE BEGIN USART2_Init 1 */
+  /* USER CODE BEGIN LPUART1_Init 1 */
 
-  /* USER CODE END USART2_Init 1 */
-  huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
-  huart2.Init.WordLength = UART_WORDLENGTH_8B;
-  huart2.Init.StopBits = UART_STOPBITS_1;
-  huart2.Init.Parity = UART_PARITY_NONE;
-  huart2.Init.Mode = UART_MODE_TX_RX;
-  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
-  huart2.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-  huart2.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-  if (HAL_UART_Init(&huart2) != HAL_OK)
+  /* USER CODE END LPUART1_Init 1 */
+  hlpuart1.Instance = LPUART1;
+  hlpuart1.Init.BaudRate = 115200;
+  hlpuart1.Init.WordLength = UART_WORDLENGTH_8B;
+  hlpuart1.Init.StopBits = UART_STOPBITS_1;
+  hlpuart1.Init.Parity = UART_PARITY_NONE;
+  hlpuart1.Init.Mode = UART_MODE_TX_RX;
+  hlpuart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  hlpuart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  hlpuart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&hlpuart1) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN USART2_Init 2 */
+  /* USER CODE BEGIN LPUART1_Init 2 */
 
-  /* USER CODE END USART2_Init 2 */
+  /* USER CODE END LPUART1_Init 2 */
+
+}
+
+/**
+  * @brief USART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 115200;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+
+  /* USER CODE END USART1_Init 2 */
 
 }
 
@@ -318,7 +388,7 @@ static void MX_GPIO_Init(void)
 
 PUTCHAR_PROTOTYPE
 {
-  HAL_UART_Transmit(&huart2, (uint8_t *)&ch, 1, 0xFFFF);
+  HAL_UART_Transmit(&hlpuart1, (uint8_t *)&ch, 1, 0xFFFF);
   return ch;
 }
 /* USER CODE END 4 */

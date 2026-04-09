@@ -34,3 +34,21 @@ Command-line arguments:  -os linux -ws gtk -arch x86_64 -data /home/bcomerfo/EEC
 
 !ENTRY org.eclipse.cdt.core 1 0 2026-04-07 19:46:42.483
 !MESSAGE Indexed 'SquidGames' (26 sources, 153 headers) in 1.45 sec: 17,684 declarations; 93,030 references; 3 unresolved inclusions; 46 syntax errors; 171 unresolved names (0.15%)
+!SESSION 2026-04-08 17:55:03.838 -----------------------------------------------
+eclipse.buildId=Version 1.19.0
+java.version=21.0.3
+java.vendor=Eclipse Adoptium
+BootLoader constants: OS=linux, ARCH=x86_64, WS=gtk, NL=en_US
+Command-line arguments:  -os linux -ws gtk -arch x86_64
+
+!ENTRY com.st.stm32cube.ide.mcu.informationcenter 4 4 2026-04-08 17:55:12.940
+!MESSAGE CubeMX plugin appears to be active, Log4j initialization might be too late.
+
+!ENTRY com.st.stm32cube.ide.mcu.informationcenter 1 1 2026-04-08 17:55:12.942
+!MESSAGE Log4j2 initialized with config file /home/bcomerfo/EECS373/SquidGames/WristMount/.metadata/.log4j2.xml
+
+!ENTRY com.st.stm32cube.ide.mcu.ide 1 1 2026-04-08 17:55:16.391
+!MESSAGE Started RMI Server, listening on port 41337
+
+!ENTRY org.eclipse.cdt.core 1 0 2026-04-08 17:56:27.992
+!MESSAGE Indexed 'SquidGames' (25 sources, 120 headers) in 2.16 sec: 14,118 declarations; 83,325 references; 3 unresolved inclusions; 46 syntax errors; 171 unresolved names (0.18%)
