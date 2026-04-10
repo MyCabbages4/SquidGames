@@ -21,7 +21,11 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "stdio.h"
+#include "ili9488.h"
+#include "lvgl.h"
+#include <stdio.h>
+#include "motor_ui.h"
+#include <math.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -52,6 +56,7 @@ typedef struct {
 #define GEAR_RATIO 16.0f // ~4*4 = ~16 encoder revolutions for a motor output revolution
 #define CPR (PPR * GEAR_RATIO * 4.0f)
 
+#define LVGL_BUF_LINES  40  // number of rows in LVGL draw buffer
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -82,6 +87,18 @@ Motor motor_1;
 Motor motor_2;
 uint16_t adc_vals[2];
 
+// LVGL display buffer
+static lv_disp_draw_buf_t draw_buf;
+static lv_color_t lvgl_buf1[ILI9488_WIDTH * LVGL_BUF_LINES];
+static lv_color_t lvgl_buf2[ILI9488_WIDTH * LVGL_BUF_LINES];
+
+// DMA transfer buffer — holds RGB666 converted pixels
+// Max size: 320 pixels * 10 rows * 3 bytes = 9,600 bytes
+static uint8_t dma_buf[ILI9488_WIDTH * LVGL_BUF_LINES * 3];
+
+// Store the display driver pointer so the DMA ISR can call lv_disp_flush_ready
+static lv_disp_drv_t *disp_drv_p = NULL;
+lv_disp_t * g_disp_p;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -96,7 +113,8 @@ static void MX_SPI1_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_SPI3_Init(void);
 /* USER CODE BEGIN PFP */
-
+static void lvgl_display_init(void);
+static void my_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -181,6 +199,74 @@ float adc_to_current(uint32_t adc_val) {
 	return voltage / 0.7;
 }
 
+// ---- LVGL Display Flush Callback (DMA version) ----
+// Converts RGB565 → RGB666 into a static buffer, then fires DMA.
+// Returns immediately — CPU is free while DMA streams to SPI.
+// lv_disp_flush_ready() is called from HAL_SPI_TxCpltCallback when done.
+static void my_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p) {
+    uint16_t w = area->x2 - area->x1 + 1;
+    uint16_t h = area->y2 - area->y1 + 1;
+    uint32_t total_pixels = w * h;
+    printf("FLUSH: %dx%d at (%d,%d)\n\r", w, h, area->x1, area->y1);
+
+
+    // Save the driver pointer for the DMA completion callback
+    disp_drv_p = drv;
+
+    // Convert all pixels from RGB565 → RGB666 into the DMA buffer
+    uint8_t *dst = dma_buf;
+    for (uint32_t i = 0; i < total_pixels; i++) {
+        uint16_t c = color_p[i].full;
+        *dst++ = (c >> 8) & 0xF8;
+        *dst++ = (c >> 3) & 0xFC;
+        *dst++ = (c << 3) & 0xF8;
+    }
+
+    // Set the address window (blocking — only a few bytes, fast)
+    ILI9488_SetWindow(area->x1, area->y1, area->x2, area->y2);
+
+    // Set DC=data, CS=low, then fire DMA
+    LCD_DC_HIGH();
+    LCD_CS_LOW();
+    HAL_SPI_Transmit_DMA(&hspi3, dma_buf, total_pixels * 3);
+
+    HAL_StatusTypeDef ret = HAL_SPI_Transmit_DMA(&hspi3, dma_buf, total_pixels * 3);
+    if (ret != HAL_OK) {
+        printf("DMA FAIL: %d, total=%lu\n\r", ret, (unsigned long)(total_pixels * 3));
+        LCD_CS_HIGH();
+        lv_disp_flush_ready(drv);  // unblock LVGL even on failure
+    }
+    // DO NOT call lv_disp_flush_ready here!
+    // It will be called from HAL_SPI_TxCpltCallback when DMA finishes.
+}
+
+// ---- LVGL Display Driver Setup ----
+static void lvgl_display_init(void) {
+	lv_disp_draw_buf_init(&draw_buf, lvgl_buf1, lvgl_buf2, ILI9488_WIDTH * LVGL_BUF_LINES);
+
+    static lv_disp_drv_t disp_drv;
+    lv_disp_drv_init(&disp_drv);
+    disp_drv.hor_res  = ILI9488_WIDTH;    // 320
+    disp_drv.ver_res  = ILI9488_HEIGHT;   // 480
+
+    disp_drv.flush_cb = my_flush_cb;
+    disp_drv.draw_buf = &draw_buf;
+    g_disp_p = lv_disp_drv_register(&disp_drv);
+//    lv_disp_set_rotation(g_disp_p, LV_DISP_ROT_90);
+}
+
+// ---- DMA Transfer Complete Callback ----
+// Called by HAL from the DMA interrupt when SPI TX finishes.
+void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi) {
+    if (hspi->Instance == SPI3) {
+        LCD_CS_HIGH();  // deselect the display
+        printf("DMA_DONE\n\r");
+
+        if (disp_drv_p != NULL) {
+            lv_disp_flush_ready(disp_drv_p);  // tell LVGL: ready for next flush
+        }
+    }
+}
 /* USER CODE END 0 */
 
 /**
@@ -221,6 +307,22 @@ int main(void)
   MX_ADC1_Init();
   MX_SPI3_Init();
   /* USER CODE BEGIN 2 */
+  // Quick SPI3 sanity check - toggle CS and send a dummy byte
+//  LCD_CS_LOW();
+//  uint8_t dummy = 0xAA;
+//  HAL_StatusTypeDef ret = HAL_SPI_Transmit(&hspi3, &dummy, 1, 1000);
+//  LCD_CS_HIGH();
+//  printf("SPI3 transmit returned: %d\n\r", ret);  // 0=OK, 1=Error, 2=Busy, 3=Timeout
+
+  // 1. Init the LCD hardware
+  ILI9488_Init(&hspi3);
+//  ILI9488_FillScreen(ILI9488_RED);
+//  while(1);
+  // 2. Init LVGL core
+  lv_init();
+
+  // 3. Register the display driver
+  lvgl_display_init();
   // calibrate ADC for better accuracy
   HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
 
@@ -243,7 +345,7 @@ int main(void)
   motor_1.id = 1;
   motor_2.id = 2;
   // current sensing
-  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_vals, 2);
+//  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_vals, 2);
   // PID stuff
   float set_point = 0.0f;
 //  printf("Enter a set point for the motor to go to in degrees \n\r");
@@ -262,16 +364,39 @@ int main(void)
   spi_transaction(send, recv, 9);
   send[1] = 0x42;
   send[2] = 0x00;
+
+
+  // Set a dark background
+	lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0xDE3163), LV_PART_MAIN);
+
+	// Title
+	lv_obj_t *title = lv_label_create(lv_scr_act());
+	lv_label_set_text(title, "Motor Status");
+	lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+	lv_obj_set_style_text_font(title, &lv_font_montserrat_14, LV_PART_MAIN);
+	lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+
+	// Create 2 motor bars, stacked vertically
+	motor_bar_t motor1, motor2;
+	motor_bar_create(&motor1, lv_scr_act(), "Motor 1", 20, 40);
+	motor_bar_create(&motor2, lv_scr_act(), "Motor 2", 20, 110);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   printf("Hello world\n\r");
+  printf("LVGL tick test:\n\r");
+  printf("  tick = %u\n\r", (unsigned)lv_tick_get());
+  HAL_Delay(100);
+  printf("  tick = %u\n\r", (unsigned)lv_tick_get());
+  printf("  LV_MEM_SIZE = %u\n\r", (unsigned)LV_MEM_SIZE);
   while (1)
   {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+//	  printf("Entering main loop\n\r");
+
 //	update_motor(&motor_2, set_point);
 //	update_motor(&motor_1, set_point);
 
@@ -291,7 +416,15 @@ int main(void)
 	set_pwm(&motor_1, motor_1_speed);
 	set_pwm(&motor_2, motor_2_speed);
 
-	printf("Current: [%f, %f]\n\r", adc_to_current(adc_vals[0]), adc_to_current(adc_vals[1]));
+  	static float sim_voltage = 0.0f;
+	sim_voltage += 0.1f;
+
+	motor_bar_set_voltage(&motor1, 12 * motor_1_speed);
+	motor_bar_set_voltage(&motor2, 12 * motor_2_speed);
+	// motor_bar_set_voltage(&motor1, 12 * sin(sim_voltage));
+	// motor_bar_set_voltage(&motor2, 12 * cos(sim_voltage));
+
+//	printf("Current: [%f, %f]\n\r", adc_to_current(adc_vals[0]), adc_to_current(adc_vals[1]));
 
     HAL_Delay((int)delay);
   }
@@ -755,7 +888,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13|GPIO_PIN_15, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOF, LCD_CS_Pin|LCD_DC_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin : PE2 */
   GPIO_InitStruct.Pin = GPIO_PIN_2;
@@ -802,11 +935,11 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PF13 PF15 */
-  GPIO_InitStruct.Pin = GPIO_PIN_13|GPIO_PIN_15;
+  /*Configure GPIO pins : LCD_CS_Pin LCD_DC_Pin */
+  GPIO_InitStruct.Pin = LCD_CS_Pin|LCD_DC_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PB12 PB13 PB15 */
@@ -857,10 +990,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Alternate = GPIO_AF8_SDMMC1;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PC8 PC9 PC10 PC11
-                           PC12 */
-  GPIO_InitStruct.Pin = GPIO_PIN_8|GPIO_PIN_9|GPIO_PIN_10|GPIO_PIN_11
-                          |GPIO_PIN_12;
+  /*Configure GPIO pins : PC8 PC9 */
+  GPIO_InitStruct.Pin = GPIO_PIN_8|GPIO_PIN_9;
   GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;

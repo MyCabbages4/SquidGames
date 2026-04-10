@@ -340,18 +340,18 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* hspi)
     /* Peripheral clock enable */
     __HAL_RCC_SPI3_CLK_ENABLE();
 
-    __HAL_RCC_GPIOB_CLK_ENABLE();
+    __HAL_RCC_GPIOC_CLK_ENABLE();
     /**SPI3 GPIO Configuration
-    PB3 (JTDO/TRACESWO)     ------> SPI3_SCK
-    PB4 (NJTRST)     ------> SPI3_MISO
-    PB5     ------> SPI3_MOSI
+    PC10     ------> SPI3_SCK
+    PC11     ------> SPI3_MISO
+    PC12     ------> SPI3_MOSI
     */
-    GPIO_InitStruct.Pin = GPIO_PIN_3|GPIO_PIN_4|GPIO_PIN_5;
+    GPIO_InitStruct.Pin = GPIO_PIN_10|GPIO_PIN_11|GPIO_PIN_12;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
     GPIO_InitStruct.Alternate = GPIO_AF6_SPI3;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
     /* SPI3 DMA Init */
     /* SPI3_TX Init */
@@ -417,11 +417,11 @@ void HAL_SPI_MspDeInit(SPI_HandleTypeDef* hspi)
     __HAL_RCC_SPI3_CLK_DISABLE();
 
     /**SPI3 GPIO Configuration
-    PB3 (JTDO/TRACESWO)     ------> SPI3_SCK
-    PB4 (NJTRST)     ------> SPI3_MISO
-    PB5     ------> SPI3_MOSI
+    PC10     ------> SPI3_SCK
+    PC11     ------> SPI3_MISO
+    PC12     ------> SPI3_MOSI
     */
-    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_3|GPIO_PIN_4|GPIO_PIN_5);
+    HAL_GPIO_DeInit(GPIOC, GPIO_PIN_10|GPIO_PIN_11|GPIO_PIN_12);
 
     /* SPI3 DMA DeInit */
     HAL_DMA_DeInit(hspi->hdmatx);
