@@ -207,7 +207,7 @@ static void my_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *c
     uint16_t w = area->x2 - area->x1 + 1;
     uint16_t h = area->y2 - area->y1 + 1;
     uint32_t total_pixels = w * h;
-    printf("FLUSH: %dx%d at (%d,%d)\n\r", w, h, area->x1, area->y1);
+//    printf("FLUSH: %dx%d at (%d,%d)\n\r", w, h, area->x1, area->y1);
 
 
     // Save the driver pointer for the DMA completion callback
@@ -228,11 +228,11 @@ static void my_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *c
     // Set DC=data, CS=low, then fire DMA
     LCD_DC_HIGH();
     LCD_CS_LOW();
-    HAL_SPI_Transmit_DMA(&hspi3, dma_buf, total_pixels * 3);
+//    HAL_SPI_Transmit_DMA(&hspi3, dma_buf, total_pixels * 3);
 
     HAL_StatusTypeDef ret = HAL_SPI_Transmit_DMA(&hspi3, dma_buf, total_pixels * 3);
     if (ret != HAL_OK) {
-        printf("DMA FAIL: %d, total=%lu\n\r", ret, (unsigned long)(total_pixels * 3));
+//        printf("DMA FAIL: %d, total=%lu\n\r", ret, (unsigned long)(total_pixels * 3));
         LCD_CS_HIGH();
         lv_disp_flush_ready(drv);  // unblock LVGL even on failure
     }
@@ -260,7 +260,7 @@ static void lvgl_display_init(void) {
 void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi) {
     if (hspi->Instance == SPI3) {
         LCD_CS_HIGH();  // deselect the display
-        printf("DMA_DONE\n\r");
+//        printf("DMA_DONE\n\r");
 
         if (disp_drv_p != NULL) {
             lv_disp_flush_ready(disp_drv_p);  // tell LVGL: ready for next flush
@@ -345,7 +345,7 @@ int main(void)
   motor_1.id = 1;
   motor_2.id = 2;
   // current sensing
-//  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_vals, 2);
+  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_vals, 2);
   // PID stuff
   float set_point = 0.0f;
 //  printf("Enter a set point for the motor to go to in degrees \n\r");
@@ -358,7 +358,7 @@ int main(void)
   float delay = 10.0f;
 
   // Configure controller to be analog
-  float speed_mul = 1.0f;
+  float speed_mul = .25f;
   uint8_t send[] = {0x01, 0x43, 0x44, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
   uint8_t recv[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
   spi_transaction(send, recv, 9);
@@ -367,7 +367,7 @@ int main(void)
 
 
   // Set a dark background
-	lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0xDE3163), LV_PART_MAIN);
+	lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x0D1117), LV_PART_MAIN);
 
 	// Title
 	lv_obj_t *title = lv_label_create(lv_scr_act());
@@ -377,9 +377,11 @@ int main(void)
 	lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
 
 	// Create 2 motor bars, stacked vertically
-	motor_bar_t motor1, motor2;
-	motor_bar_create(&motor1, lv_scr_act(), "Motor 1", 20, 40);
-	motor_bar_create(&motor2, lv_scr_act(), "Motor 2", 20, 110);
+	motor_bar_t motorV1, motorV2, motorC1, motorC2;
+	motor_bar_create(&motorV1, lv_scr_act(), "M1 Voltage", 20, 40, -12, 12);
+	motor_bar_create(&motorV2, lv_scr_act(), "M2 Voltage", 20, 110, -12, 12);
+	motor_bar_create(&motorC1, lv_scr_act(), "M1 Current", 20, 180, 0, 1.25);
+	motor_bar_create(&motorC2, lv_scr_act(), "M2 Current", 20, 250, 0, 1.25);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -390,11 +392,13 @@ int main(void)
   HAL_Delay(100);
   printf("  tick = %u\n\r", (unsigned)lv_tick_get());
   printf("  LV_MEM_SIZE = %u\n\r", (unsigned)LV_MEM_SIZE);
+
   while (1)
   {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	  lv_timer_handler();
 //	  printf("Entering main loop\n\r");
 
 //	update_motor(&motor_2, set_point);
@@ -404,6 +408,8 @@ int main(void)
 	float motor_1_speed = -(((float)recv[8] - 127.5f) / 127.5f) * speed_mul;
 	float motor_2_speed = -(((float)recv[6] - 127.5f) / 127.5f) * speed_mul;
 
+
+
 	if (117 < recv[8] && recv[8] < 127) {
 		motor_1_speed = 0.0f;
 	}
@@ -411,7 +417,12 @@ int main(void)
 	if (117 < recv[6] && recv[6] < 127) {
 		motor_2_speed = 0.0f;
 	}
-//	printf("0: %02X, 1: %02X, 2: %02X, 3: %02X, 4: %02X, 5: %02X, 6: %02X, 7: %02X, 8: %02X,\n\r", recv[0] & 0xFF, recv[1] & 0xFF, recv[2] & 0xFF, recv[3] & 0xFF, recv[4] & 0xFF, recv[5] & 0xFF, recv[6] & 0xFF, recv[7] & 0xFF, recv[8] & 0xFF);
+
+	float temp = motor_1_speed;
+	motor_1_speed = motor_2_speed;
+	motor_2_speed = temp;
+
+	printf("0: %02X, 1: %02X, 2: %02X, 3: %02X, 4: %02X, 5: %02X, 6: %02X, 7: %02X, 8: %02X,\n\r", recv[0] & 0xFF, recv[1] & 0xFF, recv[2] & 0xFF, recv[3] & 0xFF, recv[4] & 0xFF, recv[5] & 0xFF, recv[6] & 0xFF, recv[7] & 0xFF, recv[8] & 0xFF);
 //	printf("Motor 1 Speed: %.2f, Motor 2 Speed: %.2f\n\r", motor_1_speed, motor_2_speed);
 	set_pwm(&motor_1, motor_1_speed);
 	set_pwm(&motor_2, motor_2_speed);
@@ -419,12 +430,14 @@ int main(void)
   	static float sim_voltage = 0.0f;
 	sim_voltage += 0.1f;
 
-	motor_bar_set_voltage(&motor1, 12 * motor_1_speed);
-	motor_bar_set_voltage(&motor2, 12 * motor_2_speed);
+	motor_bar_set_voltage(&motorV1, 12 * motor_1_speed);
+	motor_bar_set_voltage(&motorV2, 12 * motor_2_speed);
+	motor_bar_set_voltage(&motorC1, adc_to_current(adc_vals[0]));
+	motor_bar_set_voltage(&motorC2, adc_to_current(adc_vals[1]));
 	// motor_bar_set_voltage(&motor1, 12 * sin(sim_voltage));
 	// motor_bar_set_voltage(&motor2, 12 * cos(sim_voltage));
 
-//	printf("Current: [%f, %f]\n\r", adc_to_current(adc_vals[0]), adc_to_current(adc_vals[1]));
+	printf("Current: [%f, %f]\n\r", adc_to_current(adc_vals[0]), adc_to_current(adc_vals[1]));
 
     HAL_Delay((int)delay);
   }

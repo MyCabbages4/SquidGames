@@ -1,7 +1,12 @@
 #include "motor_ui.h"
+#include <stdio.h>
+#include <stdlib.h>
 
 void motor_bar_create(motor_bar_t *mb, lv_obj_t *parent,
-                      const char *name, lv_coord_t x, lv_coord_t y) {
+                      const char *name, lv_coord_t x, lv_coord_t y, float vmin, float vmax) {
+
+	mb->val_max = vmax;
+	mb->val_min = vmin;
 
     // Container
     mb->container = lv_obj_create(parent);
@@ -31,8 +36,8 @@ void motor_bar_create(motor_bar_t *mb, lv_obj_t *parent,
     lv_obj_set_size(mb->bar, 270, 20);
     lv_obj_align(mb->bar, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_bar_set_range(mb->bar,
-                     (int32_t)(MOTOR_VOLTAGE_MIN * 10),
-                     (int32_t)(MOTOR_VOLTAGE_MAX * 10));
+                     (int32_t)(mb->val_min * 10),
+                     (int32_t)(mb->val_max * 10));
     lv_bar_set_value(mb->bar, 0, LV_ANIM_OFF);
 
     // Bar background (unfilled) — dark grey track
@@ -48,12 +53,15 @@ void motor_bar_create(motor_bar_t *mb, lv_obj_t *parent,
     lv_obj_set_style_radius(mb->bar, 5, LV_PART_INDICATOR);
 }
 
-void motor_bar_set_voltage(motor_bar_t *mb, float voltage) {
-    if (voltage < MOTOR_VOLTAGE_MIN) voltage = MOTOR_VOLTAGE_MIN;
-    if (voltage > MOTOR_VOLTAGE_MAX) voltage = MOTOR_VOLTAGE_MAX;
+void motor_bar_set_voltage(motor_bar_t *mb, float value) {
+    printf("%f value!!", value);
 
-    lv_bar_set_value(mb->bar, (int32_t)(voltage * 10), LV_ANIM_OFF);
-    int whole = (int)voltage;
-	int frac  = ((int)(voltage * 10)) % 10;
-	lv_label_set_text_fmt(mb->value_label, "%d.%d Volts	", whole, frac);
+    if (value < mb->val_min) value = mb->val_min;
+    if (value > mb->val_max) value = mb->val_max;
+
+    lv_bar_set_value(mb->bar, (int32_t)(value * 10), LV_ANIM_OFF);
+    int whole = (int)value;
+//	int frac1  = abs(((int)(value * 10)) % 10);
+	int frac2  = abs(((int)(value * 100)) % 100);
+	lv_label_set_text_fmt(mb->value_label, "%d.%d", whole, frac2);
 }
