@@ -42,6 +42,7 @@ typedef struct {
 	uint32_t pos_ch;
 	uint32_t neg_ch;
 	uint8_t id;
+	float velocity;
 } Motor;
 
 /* USER CODE END PTD */
@@ -51,6 +52,9 @@ typedef struct {
 #define PPR 20.0f
 #define GEAR_RATIO 16.0f // ~4*4 = ~16 encoder revolutions for a motor output revolution
 #define CPR (PPR * GEAR_RATIO * 4.0f)
+//#define DT
+#define DT 0.004369f
+
 
 /* USER CODE END PD */
 
@@ -65,12 +69,15 @@ UART_HandleTypeDef hlpuart1;
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
+TIM_HandleTypeDef htim4;
 
 /* USER CODE BEGIN PV */
 volatile int32_t encoder_count = 0;
 volatile float revolutions = 0;
 volatile float degrees = 0;
 volatile int deg = 0;
+volatile uint32_t last_count = 0;
+uint32_t prev_cnt = 0;
 Motor motor_1;
 Motor motor_2;
 
@@ -83,6 +90,7 @@ static void MX_TIM2_Init(void);
 static void MX_LPUART1_UART_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_TIM1_Init(void);
+static void MX_TIM4_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -90,15 +98,73 @@ static void MX_TIM1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
-	motor_2.encoder_count = __HAL_TIM_GET_COUNTER(&htim2);
-	motor_1.encoder_count = __HAL_TIM_GET_COUNTER(&htim1);
+
+	int motor_2_count = __HAL_TIM_GET_COUNTER(&htim2);
+	int motor_1_count = __HAL_TIM_GET_COUNTER(&htim1);
+//	motor_1.velocity = ((float)motor_1_count - motor_1.encoder_count) / ((overflows * 65535 + timer_count) * (1.0f/15000000));
+	motor_1.encoder_count = motor_1_count;
+	motor_2.encoder_count = motor_2_count;
+//	printf("M1_vel:%.2f\n\r", motor_1.velocity);
+
+
+	// velocity shit:
+//	int32_t cnt = (int32_t)TIM4->CNT;
+//	int32_t delta = cnt - prev_cnt;
+//	prev_cnt = cnt;
+//    if (delta >  32767) delta -= 65536;
+//    if (delta < -32768) delta += 65536;
+//    printf("cnt: %d\n\r", cnt);
+
+    // delta is in encoder counts over DT seconds
+    // TIM1 in encoder mode TI12 gives PPR*4 counts per revolution
+//    float rpm = ((float)delta / (PPR * 4.0f)) / DT * 60.0f;
+
+
+//	printf("RPM: %.2f\n\r", rpm);
 
 //	printf("Count%d:%ld Count%d:%ld\r\n", motor_1.id, motor_1.encoder_count, motor_2.id, motor_2.encoder_count);
 }
 
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM4)  // control loop timer at 1kHz
+    {
+        // 1. measure velocity
+        int32_t current = motor_1.encoder_count;
+        int32_t delta = current - last_count;
+//        printf("Curr: %dlast: %d\n\r", current, last_count);
+        last_count = current;
+
+        if (delta > 32767) delta -= 65536;
+        if (delta < -32768) delta += 65536;
+//        printf("Delta: %d\n\r", delta);
+
+        float rpm = (((float)delta / CPR)) / DT;
+        printf("RPM:%.2f\n\r", rpm);
+        // 2. run PID
+//        float output = PID_Update(&motor1_pid, setpoint_rpm, rpm);
+
+        // 3. write PWM
+        // handle direction via sign of output
+//        if (output >= 0)
+//        {
+//            __HAL_TIM_SET_COMPARE(&htim_pwm, TIM_CHANNEL_1, (uint32_t)output);
+//            __HAL_TIM_SET_COMPARE(&htim_pwm, TIM_CHANNEL_2, 0);
+//        }
+//        else
+//        {
+//            __HAL_TIM_SET_COMPARE(&htim_pwm, TIM_CHANNEL_1, 0);
+//            __HAL_TIM_SET_COMPARE(&htim_pwm, TIM_CHANNEL_2, (uint32_t)(-output));
+//        }
+    }
+}
+
+
 void set_pwm(Motor* m, float duty_cycle_percent) {
 	int duty_cycle = (int)(duty_cycle_percent * 200);
-//	printf("Setting duty cycle to: %.2f\n\r", duty_cycle);
+//	int duty_cycle = (int)duty_cycle_percent;
+//	printf("Setting duty cycle to: %d\n\r", duty_cycle);
+//	printf("Positive channel: %d, Neg channel: %d\n\r", m->pos_ch, m->neg_ch);
 //	printf(",duty_cycle:%d", duty_cycle);
 //	printf(",pos_ch:%d,neg_ch:%d\n\r", m->pos_ch, m->neg_ch);
 	if (duty_cycle < 0) {
@@ -110,12 +176,17 @@ void set_pwm(Motor* m, float duty_cycle_percent) {
 	}
 }
 
-void update_motor(Motor* m, float set_point) {
+void update_motor_pos(Motor* m, float set_point) {
 	float revolutions = (float)m->encoder_count / CPR;
 	float degrees = revolutions * 360.0f;
 	float error = set_point - degrees;
-//	printf("Error%d:%.2f ", m->id, error);
-//	printf("Pos%d:%.2f\n\r", m->id, degrees);
+	if (degrees >= 90.0) {
+		printf("Pos%d:%.2f\n\r", m->id, degrees);
+		set_pwm(m, 0);
+		return;
+	}
+	printf("Error%d:%.2f ", m->id, error);
+	printf("Pos%d:%.2f\n\r", m->id, degrees);
 
 	// Update PID
 	float P = m->gains.kp * error;
@@ -144,9 +215,19 @@ void update_motor(Motor* m, float set_point) {
 		output = 1.0f;
 	}
 
-//	printf("Output:%.2f,P:%.4f\n\r", output, P);
+	printf("Output:%.2f,P:%.4f\n\r", output, P);
 
 	set_pwm(m, output);
+}
+
+void update_motor_vel(Motor* m, float target_vel) {
+	// Get current velocity
+//	float revolutions = (float)m->encoder_count / CPR;
+//	float degrees = revolutions * 360.0f;
+//	float error = set_point - degrees;
+//
+//	motor_1.velocity = ((float)motor_1_count - motor_1.encoder_count) / ((overflows * 65535 + timer_count) * (1.0f/15000000));
+
 }
 void tune_motor_1() {
 	  motor_1.gains.kp = 0.0048f;
@@ -192,11 +273,15 @@ int main(void)
   MX_LPUART1_UART_Init();
   MX_TIM3_Init();
   MX_TIM1_Init();
+  MX_TIM4_Init();
   /* USER CODE BEGIN 2 */
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+  HAL_TIM_IC_Start_IT(&htim4, TIM_CHANNEL_1);
+  HAL_TIM_Base_Start_IT(&htim4);
+
   // Start encoder mode
   __HAL_TIM_SET_COUNTER(&htim2, 0);
   __HAL_TIM_SET_COUNTER(&htim1, 0);
@@ -220,7 +305,9 @@ int main(void)
 //  printf("Motor will go to %.2f degrees, which correlates to %.2f rotations\n\r", set_point, counter_target)
   // Tuning parameters:
 
-  float delay = 10.0f;
+  float delay = 700.0f;
+  float kafjlafkj = 0.1f;
+  float add = 0.1f;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -231,10 +318,17 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	update_motor(&motor_2, set_point);
-	update_motor(&motor_1, set_point);
+//	update_motor_pos(&motor_2, set_point);
+//	update_motor_pos(&motor_1, set_point);
+//	set_pwm(&motor_1, 0.2);
 
-//	set_pwm(&motor_1, -0.2);
+	set_pwm(&motor_1, kafjlafkj);
+	kafjlafkj += add;
+	if (kafjlafkj > 1) {
+		add = -0.1f;
+	} else if (kafjlafkj < -1) {
+		add = 0.1f;
+	}
 //	set_pwm(&motor_2, -0.2);
     HAL_Delay((int)delay);
   }
@@ -495,6 +589,51 @@ static void MX_TIM3_Init(void)
 }
 
 /**
+  * @brief TIM4 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM4_Init(void)
+{
+
+  /* USER CODE BEGIN TIM4_Init 0 */
+
+  /* USER CODE END TIM4_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM4_Init 1 */
+
+  /* USER CODE END TIM4_Init 1 */
+  htim4.Instance = TIM4;
+  htim4.Init.Prescaler = 7;
+  htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim4.Init.Period = 65535;
+  htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim4, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim4, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM4_Init 2 */
+
+  /* USER CODE END TIM4_Init 2 */
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -607,14 +746,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Alternate = GPIO_AF7_USART3;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PD14 PD15 */
-  GPIO_InitStruct.Pin = GPIO_PIN_14|GPIO_PIN_15;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.Alternate = GPIO_AF2_TIM4;
-  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
-
   /*Configure GPIO pin : PC6 */
   GPIO_InitStruct.Pin = GPIO_PIN_6;
   GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
@@ -687,14 +818,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Alternate = GPIO_AF6_SPI3;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PB6 PB7 */
-  GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_7;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.Alternate = GPIO_AF2_TIM4;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
   /*Configure GPIO pins : PB8 PB9 */
   GPIO_InitStruct.Pin = GPIO_PIN_8|GPIO_PIN_9;
   GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
@@ -703,15 +826,14 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PE0 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.Alternate = GPIO_AF2_TIM4;
-  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
-
   /* USER CODE BEGIN MX_GPIO_Init_2 */
+  GPIO_InitStruct.Pin       = GPIO_PIN_6;
+  GPIO_InitStruct.Mode      = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull      = GPIO_NOPULL;
+  GPIO_InitStruct.Speed     = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = GPIO_AF2_TIM4;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
 
   /* USER CODE END MX_GPIO_Init_2 */
 }
