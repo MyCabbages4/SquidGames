@@ -34,7 +34,6 @@ typedef struct {
 	float prev_error;
 	float output;
 	float integral_max;
-	float set_duty_cycle;
 } PID;
 
 typedef struct {
@@ -45,6 +44,7 @@ typedef struct {
 	uint32_t neg_ch;
 	uint8_t id;
 	float velocity;
+	float set_duty_cycle;
 } Motor;
 
 /* USER CODE END PTD */
@@ -94,7 +94,14 @@ static void MX_TIM3_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_TIM4_Init(void);
 /* USER CODE BEGIN PFP */
-
+float pid(Motor*, float, float);
+float get_velocity(Motor*);
+void control(Motor*);
+void set_pwm(Motor*, float);
+void update_motor_pos(Motor*, float);
+void update_motor_vel(Motor*, float);
+void tune_motor_1();
+void tune_motor_2();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -108,7 +115,7 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 	motor_2.encoder_count = motor_2_count;
 }
 
-float pid(motor* m, float target, float set_point) {
+float pid(Motor* m, float target, float set_point) {
 	float error = target - set_point;
 
 	float P = m->vel_gains.kp * error;
@@ -139,7 +146,7 @@ float pid(motor* m, float target, float set_point) {
 	return output;
 }
 
-float get_velocity(motor* m) {
+float get_velocity(Motor* m) {
 	int32_t current = m->encoder_count;
 	int32_t delta = current - last_count;
 	last_count = current;
@@ -152,9 +159,9 @@ float get_velocity(motor* m) {
 	return rpm;
 }
 
-void control(motor* m) {
+void control(Motor* m) {
 	float vel = get_velocity(m);
-	float duty_cycle = pid(m, m->set_duty_cycle, rpm);
+	float duty_cycle = pid(m, m->set_duty_cycle, vel);
 	set_pwm(m, duty_cycle);
 }
 
@@ -162,8 +169,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance == TIM4)  // control loop timer at 1kHz
     {
-        control(&m1);
-        control(&m2);
+        control(&motor_1);
+        control(&motor_2);
     }
 }
 
@@ -202,7 +209,7 @@ void update_motor_pos(Motor* m, float set_point) {
 //	printf("P: %.2f\n\r", P);
 	m->pos_gains.integral += error / 100.0f;
 	// TODO: anti-windup
-	float I = m->pos_gains.ki * m->gains.integral;
+	float I = m->pos_gains.ki * m->pos_gains.integral;
 	float D = m->pos_gains.kd * (error - m->pos_gains.prev_error) / 100.0f;
 	m->pos_gains.prev_error = error;
 
