@@ -34,10 +34,12 @@ typedef struct {
 	float prev_error;
 	float output;
 	float integral_max;
+	float set_duty_cycle;
 } PID;
 
 typedef struct {
-	PID gains;
+	PID pos_gains;
+	PID vel_gains;
 	int32_t encoder_count;
 	uint32_t pos_ch;
 	uint32_t neg_ch;
@@ -104,63 +106,70 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 //	motor_1.velocity = ((float)motor_1_count - motor_1.encoder_count) / ((overflows * 65535 + timer_count) * (1.0f/15000000));
 	motor_1.encoder_count = motor_1_count;
 	motor_2.encoder_count = motor_2_count;
-//	printf("M1_vel:%.2f\n\r", motor_1.velocity);
+}
 
+float pid(motor* m, float target, float set_point) {
+	float error = target - set_point;
 
-	// velocity shit:
-//	int32_t cnt = (int32_t)TIM4->CNT;
-//	int32_t delta = cnt - prev_cnt;
-//	prev_cnt = cnt;
-//    if (delta >  32767) delta -= 65536;
-//    if (delta < -32768) delta += 65536;
-//    printf("cnt: %d\n\r", cnt);
+	float P = m->vel_gains.kp * error;
 
-    // delta is in encoder counts over DT seconds
-    // TIM1 in encoder mode TI12 gives PPR*4 counts per revolution
-//    float rpm = ((float)delta / (PPR * 4.0f)) / DT * 60.0f;
+	m->vel_gains.integral += error * DT;
+	float I = m->vel_gains.ki * m->vel_gains.integral;
 
+	float D = m->vel_gains.kd * (error - m->vel_gains.prev_error) / DT;
 
-//	printf("RPM: %.2f\n\r", rpm);
+	float output = P + I + D;
 
-//	printf("Count%d:%ld Count%d:%ld\r\n", motor_1.id, motor_1.encoder_count, motor_2.id, motor_2.encoder_count);
+	if (output < -1) {
+		output = -1.0f;
+	}
+
+	if (output < -0.05f && output > -0.1f) {
+		output = -0.1f;
+	}
+
+	if (output > 0.05f && output < 0.1f) {
+		output = 0.1f;
+	}
+
+	if (output > 1.0f) {
+		output = 1.0f;
+	}
+
+	return output;
+}
+
+float get_velocity(motor* m) {
+	int32_t current = m->encoder_count;
+	int32_t delta = current - last_count;
+	last_count = current;
+
+	if (delta > 32767) delta -= 65536;
+	if (delta < -32768) delta += 65536;
+
+	float rpm = (((float)delta / CPR)) / DT;
+
+	return rpm;
+}
+
+void control(motor* m) {
+	float vel = get_velocity(m);
+	float duty_cycle = pid(m, m->set_duty_cycle, rpm);
+	set_pwm(m, duty_cycle);
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance == TIM4)  // control loop timer at 1kHz
     {
-        // 1. measure velocity
-        int32_t current = motor_1.encoder_count;
-        int32_t delta = current - last_count;
-//        printf("Curr: %dlast: %d\n\r", current, last_count);
-        last_count = current;
-
-        if (delta > 32767) delta -= 65536;
-        if (delta < -32768) delta += 65536;
-//        printf("Delta: %d\n\r", delta);
-
-        float rpm = (((float)delta / CPR)) / DT;
-        printf("RPM:%.2f\n\r", rpm);
-        // 2. run PID
-//        float output = PID_Update(&motor1_pid, setpoint_rpm, rpm);
-
-        // 3. write PWM
-        // handle direction via sign of output
-//        if (output >= 0)
-//        {
-//            __HAL_TIM_SET_COMPARE(&htim_pwm, TIM_CHANNEL_1, (uint32_t)output);
-//            __HAL_TIM_SET_COMPARE(&htim_pwm, TIM_CHANNEL_2, 0);
-//        }
-//        else
-//        {
-//            __HAL_TIM_SET_COMPARE(&htim_pwm, TIM_CHANNEL_1, 0);
-//            __HAL_TIM_SET_COMPARE(&htim_pwm, TIM_CHANNEL_2, (uint32_t)(-output));
-//        }
+        control(&m1);
+        control(&m2);
     }
 }
 
 
 void set_pwm(Motor* m, float duty_cycle_percent) {
+	m->set_duty_cycle = duty_cycle_percent;
 	int duty_cycle = (int)(duty_cycle_percent * 200);
 //	int duty_cycle = (int)duty_cycle_percent;
 //	printf("Setting duty cycle to: %d\n\r", duty_cycle);
@@ -189,13 +198,13 @@ void update_motor_pos(Motor* m, float set_point) {
 	printf("Pos%d:%.2f\n\r", m->id, degrees);
 
 	// Update PID
-	float P = m->gains.kp * error;
+	float P = m->pos_gains.kp * error;
 //	printf("P: %.2f\n\r", P);
-	m->gains.integral += error / 100.0f;
+	m->pos_gains.integral += error / 100.0f;
 	// TODO: anti-windup
-	float I = m->gains.ki * m->gains.integral;
-	float D = m->gains.kd * (error - m->gains.prev_error) / 100.0f;
-	m->gains.prev_error = error;
+	float I = m->pos_gains.ki * m->gains.integral;
+	float D = m->pos_gains.kd * (error - m->pos_gains.prev_error) / 100.0f;
+	m->pos_gains.prev_error = error;
 
 	float output = P + I + D;
 //	printf("Output%d:%.4f\n\r", m->id, output);
@@ -230,12 +239,12 @@ void update_motor_vel(Motor* m, float target_vel) {
 
 }
 void tune_motor_1() {
-	  motor_1.gains.kp = 0.0048f;
-	  motor_1.gains.ki = 0.01f;
+	  motor_1.pos_gains.kp = 0.0048f;
+	  motor_1.pos_gains.ki = 0.01f;
 }
 void tune_motor_2() {
-	  motor_2.gains.kp = 0.0041f;
-	  motor_2.gains.ki = 0.0f;
+	  motor_2.pos_gains.kp = 0.0041f;
+	  motor_2.pos_gains.ki = 0.0f;
 }
 
 /* USER CODE END 0 */
