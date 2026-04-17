@@ -256,7 +256,7 @@ int main(void)
   float delay = 10.0f;
 
   // Configure controller to be analog
-  float speed_mul = 1.0f;
+  float speed_mul = 0.4f;
   uint8_t send[] = {0x01, 0x43, 0x44, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
   uint8_t recv[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
   spi_transaction(send, recv, 9);
@@ -276,6 +276,11 @@ int main(void)
 //	update_motor(&motor_1, set_point);
 
 	spi_transaction(send, recv, 9);
+	if (recv[1] != 0x73) {
+		printf("Controller in digital mode!\n\r");
+		HAL_Delay(10);
+		continue; // Don't do anything if we are in digital mode
+	}
 	float motor_1_speed = -(((float)recv[8] - 127.5f) / 127.5f) * speed_mul;
 	float motor_2_speed = -(((float)recv[6] - 127.5f) / 127.5f) * speed_mul;
 
