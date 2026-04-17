@@ -38,7 +38,7 @@ typedef struct {
 
 typedef struct {
 	PID gains;
-	int32_t encoder_count;
+	int16_t (*get_encoder_count)();
 	uint32_t pos_ch;
 	uint32_t neg_ch;
 	uint8_t id;
@@ -53,6 +53,7 @@ typedef struct {
 #define GEAR_RATIO 16.0f // ~4*4 = ~16 encoder revolutions for a motor output revolution
 #define CPR (PPR * GEAR_RATIO * 4.0f)
 #define MAX_CURRENT 1.0f // max current for each motor (Amps)
+#define MAX_SLIP 2500
 
 /* USER CODE END PD */
 
@@ -76,13 +77,10 @@ TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 
 /* USER CODE BEGIN PV */
-volatile int32_t encoder_count = 0;
-volatile float revolutions = 0;
-volatile float degrees = 0;
-volatile int deg = 0;
 Motor motor_1;
 Motor motor_2;
 uint16_t adc_vals[2];
+int slip = 0;
 
 /* USER CODE END PV */
 
@@ -103,11 +101,12 @@ static void MX_SPI3_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
-	motor_1.encoder_count = __HAL_TIM_GET_COUNTER(&htim1);
-	motor_2.encoder_count = __HAL_TIM_GET_COUNTER(&htim2);
+int16_t get_tim1_val() {
+	return __HAL_TIM_GET_COUNTER(&htim1);
+}
 
-//	printf("Count%d:%ld Count%d:%ld\r\n", motor_1.id, motor_1.encoder_count, motor_2.id, motor_2.encoder_count);
+int16_t get_tim2_val() {
+	return __HAL_TIM_GET_COUNTER(&htim2);
 }
 
 float adc_to_current(uint16_t adc_val) {
@@ -149,7 +148,7 @@ void set_pwm(Motor* m, float duty_cycle_percent) {
 }
 
 void update_motor(Motor* m, float set_point) {
-	float revolutions = (float)m->encoder_count / CPR;
+	float revolutions = (float)m->get_encoder_count() / CPR;
 	float degrees = revolutions * 360.0f;
 	float error = set_point - degrees;
 	printf("Error%d:%.2f ", m->id, error);
@@ -264,6 +263,8 @@ int main(void)
   motor_2.id = 2;
   motor_1.current_adc = &adc_vals[0];
   motor_2.current_adc= &adc_vals[1];
+  motor_1.get_encoder_count = get_tim1_val;
+  motor_2.get_encoder_count = get_tim2_val;
   // current sensing
   HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_vals, 2);
   // PID stuff
@@ -275,7 +276,7 @@ int main(void)
 //  printf("Motor will go to %.2f degrees, which correlates to %.2f rotations\n\r", set_point, counter_target)
   // Tuning parameters:
 
-  float delay = 10.0f;
+  int delay = 5;
 
   // Configure controller to be analog
   float speed_mul = 0.35f;
@@ -303,24 +304,86 @@ int main(void)
 		HAL_Delay(10);
 		continue; // Don't do anything if we are in digital mode
 	}
-	float motor_1_speed = -(((float)recv[8] - 127.5f) / 127.5f) * speed_mul;
-	float motor_2_speed = -(((float)recv[6] - 127.5f) / 127.5f) * speed_mul;
+	uint8_t circle = !((recv[4] >> 5) & 1);
+	uint8_t square = !(recv[4] >> 7);
+	// motor 1 is on the left, motor 2 is on the right
+	// negative is pulling on the string, positive is releasing tension
+	float motor_1_speed = 0.f, motor_2_speed = 0.f;
+	if (!circle && !square) {
+		float left_joystick = -(((float)recv[8] - 127.5f) / 127.5f) * speed_mul;
+		float right_joystick = -(((float)recv[6] - 127.5f) / 127.5f) * speed_mul;
+		if (116 < recv[8] && recv[8] < 150) {
+			left_joystick = 0.0f;
+		}
 
-	if (117 < recv[8] && recv[8] < 127) {
-		motor_1_speed = 0.0f;
+		if (117 < recv[6] && recv[6] < 127) {
+			right_joystick = 0.0f;
+		}
+
+//		if (left_joystick > 0) left_joystick = 0;
+//		if (right_joystick > 0) right_joystick = 0;
+//		if (left_joystick < 0 && right_joystick == 0) {
+//			right_joystick = -0.6 * left_joystick;
+//			if (right_joystick > 0.14) right_joystick = 0.14;
+//		} else if (right_joystick < 0 && left_joystick == 0) {
+//			left_joystick = -0.6 * right_joystick;
+//			if (left_joystick > 0.14) left_joystick = 0.14;
+//		}
+	//	float motor_1_speed = -(((float)recv[8] - 127.5f) / 127.5f) * speed_mul;
+	//	float motor_2_speed = -(((float)recv[6] - 127.5f) / 127.5f) * speed_mul;
+		motor_1_speed = left_joystick;
+		motor_2_speed = right_joystick;
+
+		if (slip > MAX_SLIP) {
+			if (motor_1_speed > 0) motor_1_speed = 0;
+			if (motor_2_speed > 0) motor_2_speed = 0;
+		}
+	//	if (left_joystick < 0) { // down
+	//		motor_1_speed = left_joystick;
+	//		motor_2_speed = right_joystick;
+	//	} else if (left_joystick > 0) { // up
+	//		motor_2_speed = -left_joystick;
+	//		motor_1_speed = right_joystick;
+	//	} else {
+	//		motor_1_speed = -0.14;
+	//		motor_2_speed = -0.14;
+	//	}
+	} else if (circle && !square) { // move right
+		motor_2_speed = -0.2;
+		motor_1_speed = 0.18;
+	} else if (square && !circle) { // move left
+		motor_1_speed = -0.2;
+		motor_2_speed = 0.18;
+	} else {
+		motor_1_speed = 0;
+		motor_2_speed = 0;
 	}
 
-	if (117 < recv[6] && recv[6] < 127) {
-		motor_2_speed = 0.0f;
-	}
+
+//	if (motor_1_speed > 0) {
+//		if (motor_1_speed > -motor_2_speed)
+//			motor_1_speed = -motor_2_speed;
+//	}
+//	if (motor_2_speed > 0) {
+//		if (motor_2_speed > -motor_1_speed)
+//			motor_2_speed = -motor_1_speed;
+//	}
 //	printf("0: %02X, 1: %02X, 2: %02X, 3: %02X, 4: %02X, 5: %02X, 6: %02X, 7: %02X, 8: %02X,\n\r", recv[0] & 0xFF, recv[1] & 0xFF, recv[2] & 0xFF, recv[3] & 0xFF, recv[4] & 0xFF, recv[5] & 0xFF, recv[6] & 0xFF, recv[7] & 0xFF, recv[8] & 0xFF);
 //	printf("Motor 1 Speed: %.2f, Motor 2 Speed: %.2f\n\r", motor_1_speed, motor_2_speed);
 	set_pwm(&motor_1, motor_1_speed);
 	set_pwm(&motor_2, motor_2_speed);
 
-	printf("Current: [%f, %f]\n\r", adc_to_current(adc_vals[0]), adc_to_current(adc_vals[1]));
+//	printf("Current: [%f, %f]\n\r", adc_to_current(adc_vals[0]), adc_to_current(adc_vals[1]));
+//	printf("Motor speed: [%f, %f]\n\r", motor_1_speed, motor_2_speed);
+//	printf("circle: %d, square: %d\n\r", circle, square);
+//	printf("Current_L:%f,Current_R:%f,Lower:0,Upper:0.4,Thresh1:0.2,Thresh2:0.27\n\r", adc_to_current(adc_vals[0]), adc_to_current(adc_vals[1]));
+	int16_t enc1 = motor_1.get_encoder_count();
+	int16_t enc2 = motor_2.get_encoder_count();
+	slip = enc1 + enc2;
+//	printf("Encoder counts: [%d, %d]\n\r", enc1, enc2);
+	printf("enc1:%d,enc2:%d,slip:%d\n\r", enc1, enc2, slip);
 
-    HAL_Delay((int)delay);
+    HAL_Delay(delay);
   }
   /* USER CODE END 3 */
 }
@@ -599,7 +662,7 @@ static void MX_TIM1_Init(void)
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  sConfig.EncoderMode = TIM_ENCODERMODE_TI1;
+  sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
   sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
   sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
