@@ -42,6 +42,7 @@ typedef struct {
 	uint32_t pos_ch;
 	uint32_t neg_ch;
 	uint8_t id;
+	uint16_t* current_adc;
 } Motor;
 
 /* USER CODE END PTD */
@@ -51,6 +52,7 @@ typedef struct {
 #define PPR 20.0f
 #define GEAR_RATIO 16.0f // ~4*4 = ~16 encoder revolutions for a motor output revolution
 #define CPR (PPR * GEAR_RATIO * 4.0f)
+#define MAX_CURRENT 1.0f // max current for each motor (Amps)
 
 /* USER CODE END PD */
 
@@ -108,7 +110,15 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 //	printf("Count%d:%ld Count%d:%ld\r\n", motor_1.id, motor_1.encoder_count, motor_2.id, motor_2.encoder_count);
 }
 
-void set_pwm(Motor* m, float duty_cycle_percent) {
+float adc_to_current(uint16_t adc_val) {
+	// resistance is 0.7 ohms
+	float voltage = (adc_val / 65535.0) * 3.3;
+	// V = IR --> I = V/R
+	return voltage / 0.7;
+}
+
+// unsafe way to set motor PWM (this can stall the motor)
+void set_pwm_unsafe(Motor* m, float duty_cycle_percent) {
 	int duty_cycle = (int)(duty_cycle_percent * 200);
 //	printf("Setting duty cycle to: %.2f\n\r", duty_cycle);
 //	printf(",duty_cycle:%d", duty_cycle);
@@ -120,6 +130,22 @@ void set_pwm(Motor* m, float duty_cycle_percent) {
 		__HAL_TIM_SET_COMPARE(&htim3, m->pos_ch, duty_cycle);
 		__HAL_TIM_SET_COMPARE(&htim3, m->neg_ch, 0);
 	}
+}
+
+// set PWM speed but also limit current
+void set_pwm(Motor* m, float duty_cycle_percent) {
+	// this is essentially a P controller
+	float current_effort = (MAX_CURRENT - adc_to_current(*m->current_adc));
+	if (current_effort < 0) current_effort = 0; // we want to avoid weirdness if current is over max value
+	else if (current_effort > 1) current_effort = 1;
+
+	float requested_magnitude = duty_cycle_percent < 0 ? -duty_cycle_percent : duty_cycle_percent;
+	int sign = duty_cycle_percent < 0 ? -1 : 1;
+
+	// choose the minimum of the 2 as your actual speed
+	// the effect of this is that when we approach the max current, 'current_effort' becomes small, so we slow down the motor
+	float min_magnitude = current_effort < requested_magnitude ? current_effort : requested_magnitude;
+	set_pwm_unsafe(m, sign * min_magnitude);
 }
 
 void update_motor(Motor* m, float set_point) {
@@ -174,12 +200,6 @@ void spi_transaction(uint8_t* send, uint8_t* recv, uint32_t n) {
 	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);
 }
 
-float adc_to_current(uint32_t adc_val) {
-	// resistance is 0.7 ohms
-	float voltage = (adc_val / 65535.0) * 3.3;
-	// V = IR --> I = V/R
-	return voltage / 0.7;
-}
 
 /* USER CODE END 0 */
 
@@ -242,6 +262,8 @@ int main(void)
   tune_motor_2();
   motor_1.id = 1;
   motor_2.id = 2;
+  motor_1.current_adc = &adc_vals[0];
+  motor_2.current_adc= &adc_vals[1];
   // current sensing
   HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_vals, 2);
   // PID stuff
@@ -256,7 +278,7 @@ int main(void)
   float delay = 10.0f;
 
   // Configure controller to be analog
-  float speed_mul = 0.4f;
+  float speed_mul = 0.35f;
   uint8_t send[] = {0x01, 0x43, 0x44, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
   uint8_t recv[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
   spi_transaction(send, recv, 9);
