@@ -39,10 +39,11 @@ typedef struct {
 typedef struct {
 	PID gains;
 	int16_t (*get_encoder_count)();
+	float (*get_current)();
 	uint32_t pos_ch;
 	uint32_t neg_ch;
 	uint8_t id;
-	uint16_t* current_adc;
+	float current_ewma;
 } Motor;
 
 /* USER CODE END PTD */
@@ -54,6 +55,7 @@ typedef struct {
 #define CPR (PPR * GEAR_RATIO * 4.0f)
 #define MAX_CURRENT 1.0f // max current for each motor (Amps)
 #define MAX_SLIP 2500
+#define ALPHA 0.1 // for current EWMA
 
 /* USER CODE END PD */
 
@@ -116,6 +118,14 @@ float adc_to_current(uint16_t adc_val) {
 	return voltage / 0.7;
 }
 
+float get_current_1() {
+	return adc_to_current(adc_vals[0]);
+}
+
+float get_current_2() {
+	return adc_to_current(adc_vals[1]);
+}
+
 // unsafe way to set motor PWM (this can stall the motor)
 void set_pwm_unsafe(Motor* m, float duty_cycle_percent) {
 	int duty_cycle = (int)(duty_cycle_percent * 200);
@@ -133,8 +143,11 @@ void set_pwm_unsafe(Motor* m, float duty_cycle_percent) {
 
 // set PWM speed but also limit current
 void set_pwm(Motor* m, float duty_cycle_percent) {
+	// update ewma
+	float current_now = m->get_current();
+	m->current_ewma = (1-ALPHA) * m->current_ewma + ALPHA * current_now;
 	// this is essentially a P controller
-	float current_effort = (MAX_CURRENT - adc_to_current(*m->current_adc));
+	float current_effort = (MAX_CURRENT - m->current_ewma);
 	if (current_effort < 0) current_effort = 0; // we want to avoid weirdness if current is over max value
 	else if (current_effort > 1) current_effort = 1;
 
@@ -261,10 +274,12 @@ int main(void)
   tune_motor_2();
   motor_1.id = 1;
   motor_2.id = 2;
-  motor_1.current_adc = &adc_vals[0];
-  motor_2.current_adc= &adc_vals[1];
   motor_1.get_encoder_count = get_tim1_val;
   motor_2.get_encoder_count = get_tim2_val;
+  motor_1.get_current = get_current_1;
+  motor_2.get_current = get_current_2;
+  motor_1.current_ewma = 0;
+  motor_2.current_ewma = 0;
   // current sensing
   HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_vals, 2);
   // PID stuff
@@ -376,7 +391,7 @@ int main(void)
 //	printf("Current: [%f, %f]\n\r", adc_to_current(adc_vals[0]), adc_to_current(adc_vals[1]));
 //	printf("Motor speed: [%f, %f]\n\r", motor_1_speed, motor_2_speed);
 //	printf("circle: %d, square: %d\n\r", circle, square);
-//	printf("Current_L:%f,Current_R:%f,Lower:0,Upper:0.4,Thresh1:0.2,Thresh2:0.27\n\r", adc_to_current(adc_vals[0]), adc_to_current(adc_vals[1]));
+//	printf("Current_L:%f,Current_R:%f,Lower:0,Upper:0.7,Thresh1:0.2,Thresh2:0.27\n\r", motor_1.current_ewma, motor_2.current_ewma);
 	int16_t enc1 = motor_1.get_encoder_count();
 	int16_t enc2 = motor_2.get_encoder_count();
 	slip = enc1 + enc2;
