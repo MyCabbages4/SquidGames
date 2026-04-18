@@ -103,6 +103,14 @@ static void MX_SPI3_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+float min(float a, float b) {
+	return a < b ? a : b;
+}
+
+float max(float a, float b) {
+	return a > b ? a : b;
+}
+
 int16_t get_tim1_val() {
 	return __HAL_TIM_GET_COUNTER(&htim1);
 }
@@ -210,6 +218,65 @@ void spi_transaction(uint8_t* send, uint8_t* recv, uint32_t n) {
 	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);
 	HAL_SPI_TransmitReceive(&hspi1, send, recv, n, 100);
 	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);
+}
+
+typedef enum {
+	EXPERT, // no limits
+	ADVANCED, // same as expert, but with slip limit
+	PULL_ONLY, // you can only pull
+	LEFT_RIGHT, // one control for left/right, other for tensioning antagonistic motor
+	AUTO_SPOOL, // add an offset to make the motors automatically spool themselves in
+	SAFE, // limit unspooling to spooling speed of other motor, limits maneuverability somewhat
+} ControllerMode;
+
+void joystick_to_motor(float input1, float input2, float* motor_1_speed, float* motor_2_speed, ControllerMode mode) {
+	switch (mode) {
+		case EXPERT:
+			*motor_1_speed = input1;
+			*motor_2_speed = input2;
+			break;
+		case ADVANCED:
+			*motor_1_speed = input1;
+			*motor_2_speed = input2;
+			if (slip > MAX_SLIP) {
+				*motor_1_speed = min(*motor_1_speed, 0);
+				*motor_2_speed = min(*motor_2_speed, 0);
+			}
+			break;
+		// TODO: think about disabling brake mode for this mode
+		case PULL_ONLY:
+			*motor_1_speed = min(input1, 0);
+			*motor_2_speed = min(input2, 0);
+			break;
+		case LEFT_RIGHT:
+			if (input1 < 0) {
+				*motor_1_speed = input1;
+				float offset = min(-0.5 * input1, 0.1);
+				*motor_2_speed = input2 + offset; // add a slight unspooling offset
+			} else if (input1 > 0) {
+				*motor_2_speed = -1.0 * input1;
+				float offset = min(0.5 * input1, 0.1);
+				*motor_1_speed = input2 + offset;
+			} else { // left/right control at 0, don't want to be able to unspool the other guy
+				*motor_1_speed = 0;
+				*motor_2_speed = 0;
+			}
+			break;
+		case AUTO_SPOOL:
+			*motor_1_speed = -0.12 + input1;
+			*motor_2_speed = -0.13 + input2;
+			break;
+		case SAFE:
+			if (input1 > 0) {
+				input1 = min(input1, max(-input2, 0));
+			}
+			if (input2 > 0) {
+				input2 = min(input2, max(-input1, 0));
+			}
+			*motor_1_speed = input1;
+			*motor_2_speed = input2;
+			break;
+	}
 }
 
 
@@ -335,34 +402,9 @@ int main(void)
 			right_joystick = 0.0f;
 		}
 
-//		if (left_joystick > 0) left_joystick = 0;
-//		if (right_joystick > 0) right_joystick = 0;
-//		if (left_joystick < 0 && right_joystick == 0) {
-//			right_joystick = -0.6 * left_joystick;
-//			if (right_joystick > 0.14) right_joystick = 0.14;
-//		} else if (right_joystick < 0 && left_joystick == 0) {
-//			left_joystick = -0.6 * right_joystick;
-//			if (left_joystick > 0.14) left_joystick = 0.14;
-//		}
 	//	float motor_1_speed = -(((float)recv[8] - 127.5f) / 127.5f) * speed_mul;
 	//	float motor_2_speed = -(((float)recv[6] - 127.5f) / 127.5f) * speed_mul;
-		motor_1_speed = left_joystick;
-		motor_2_speed = right_joystick;
-
-		if (slip > MAX_SLIP) {
-			if (motor_1_speed > 0) motor_1_speed = 0;
-			if (motor_2_speed > 0) motor_2_speed = 0;
-		}
-	//	if (left_joystick < 0) { // down
-	//		motor_1_speed = left_joystick;
-	//		motor_2_speed = right_joystick;
-	//	} else if (left_joystick > 0) { // up
-	//		motor_2_speed = -left_joystick;
-	//		motor_1_speed = right_joystick;
-	//	} else {
-	//		motor_1_speed = -0.14;
-	//		motor_2_speed = -0.14;
-	//	}
+		joystick_to_motor(left_joystick, right_joystick, &motor_1_speed, &motor_2_speed, PULL_ONLY);
 	} else if (circle && !square) { // move right
 		motor_2_speed = -0.2;
 		motor_1_speed = 0.18;
@@ -374,15 +416,6 @@ int main(void)
 		motor_2_speed = 0;
 	}
 
-
-//	if (motor_1_speed > 0) {
-//		if (motor_1_speed > -motor_2_speed)
-//			motor_1_speed = -motor_2_speed;
-//	}
-//	if (motor_2_speed > 0) {
-//		if (motor_2_speed > -motor_1_speed)
-//			motor_2_speed = -motor_1_speed;
-//	}
 //	printf("0: %02X, 1: %02X, 2: %02X, 3: %02X, 4: %02X, 5: %02X, 6: %02X, 7: %02X, 8: %02X,\n\r", recv[0] & 0xFF, recv[1] & 0xFF, recv[2] & 0xFF, recv[3] & 0xFF, recv[4] & 0xFF, recv[5] & 0xFF, recv[6] & 0xFF, recv[7] & 0xFF, recv[8] & 0xFF);
 //	printf("Motor 1 Speed: %.2f, Motor 2 Speed: %.2f\n\r", motor_1_speed, motor_2_speed);
 	set_pwm(&motor_1, motor_1_speed);
