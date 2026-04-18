@@ -313,6 +313,13 @@ int get_controller_state(ControllerState* state) {
 	return 1;
 }
 
+typedef enum {
+	START_LEFT = 0,
+	MOVE_LEFT,
+	START_RIGHT,
+	MOVE_RIGHT
+} ExploreState;
+
 /* USER CODE END 0 */
 
 /**
@@ -380,6 +387,8 @@ int main(void)
   motor_2.get_current = get_current_2;
   motor_1.current_ewma = 0;
   motor_2.current_ewma = 0;
+  motor_2.current_ewma_fast = 0;
+  motor_2.current_ewma_fast = 0;
   // current sensing
   HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_vals, 2);
   // PID stuff
@@ -398,6 +407,7 @@ int main(void)
   uint8_t recv[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
   spi_transaction(send, recv, 9);
   ControllerState cs;
+  ExploreState es = START_LEFT;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -416,20 +426,83 @@ int main(void)
 		HAL_Delay(10);
 		continue;
 	}
+//	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.get_current(), motor_2.get_current());
 
-	float motor_1_speed = 0.f, motor_2_speed = 0.f;
-	if (!cs.circle && !cs.square) {
-		joystick_to_motor(cs.joy_1_y, cs.joy_2_y, &motor_1_speed, &motor_2_speed, ADVANCED);
-	} else if (cs.circle && !cs.square) { // move right
-		motor_2_speed = -0.2;
-		motor_1_speed = 0.18;
-	} else if (cs.square && !cs.circle) { // move left
+
+	float motor_1_speed = 0.0f, motor_2_speed = 0.0f;
+//	printf("State: %d\n\r", es);
+	switch (es) {
+	case START_LEFT:
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
 		motor_1_speed = -0.2;
 		motor_2_speed = 0.18;
-	} else {
-		motor_1_speed = 0;
-		motor_2_speed = 0;
+		es = MOVE_LEFT;
+		for (int i = 0; i < 90; ++i) {
+			set_pwm(&motor_1, motor_1_speed);
+			set_pwm(&motor_2, motor_2_speed);
+//			if (i % 10 == 0)
+				printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+			HAL_Delay(delay);
+		}
+//		HAL_Delay(450);
+		break;
+
+	case MOVE_LEFT:
+//		printf("Motor 1 EWMA: %.2f\n\r", motor_1.current_ewma_fast);
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
+		if (motor_1.current_ewma_fast > 0.27) {
+			motor_1_speed = 0;
+			motor_2_speed = 0;
+			es = START_RIGHT;
+		} else {
+			motor_1_speed = -0.2;
+			motor_2_speed = 0.18;
+		}
+		break;
+
+	case START_RIGHT:
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
+		motor_2_speed = -0.2;
+		motor_1_speed = 0.18;
+		es = MOVE_RIGHT;
+		for (int i = 0; i < 90; ++i) {
+			set_pwm(&motor_1, motor_1_speed);
+			set_pwm(&motor_2, motor_2_speed);
+//			if (i % 10 == 0)
+				printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+			HAL_Delay(delay);
+		}
+//		HAL_Delay(450);
+		break;
+
+	case MOVE_RIGHT:
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
+//		printf("Motor 2 EWMA: %.2f\n\r", motor_2.current_ewma_fast);
+		if (motor_2.current_ewma_fast > 0.27) {
+			motor_1_speed = 0;
+			motor_2_speed = 0;
+			es = START_LEFT;
+		} else {
+			motor_2_speed = -0.2;
+			motor_1_speed = 0.18;
+		}
+		break;
 	}
+
+//	float motor_1_speed = 0.f, motor_2_speed = 0.f;
+//	if (!cs.circle && !cs.square) {
+//		joystick_to_motor(cs.joy_1_y, cs.joy_2_y, &motor_1_speed, &motor_2_speed, ADVANCED);
+//	} else if (cs.circle && !cs.square) { // move right
+//		motor_2_speed = -0.2;
+//		motor_1_speed = 0.18;
+//	} else if (cs.square && !cs.circle) { // move left
+//		motor_1_speed = -0.2;
+//		motor_2_speed = 0.18;
+//	} else {
+//		motor_1_speed = 0;
+//		motor_2_speed = 0;
+//	}
 
 //	printf("0: %02X, 1: %02X, 2: %02X, 3: %02X, 4: %02X, 5: %02X, 6: %02X, 7: %02X, 8: %02X,\n\r", recv[0] & 0xFF, recv[1] & 0xFF, recv[2] & 0xFF, recv[3] & 0xFF, recv[4] & 0xFF, recv[5] & 0xFF, recv[6] & 0xFF, recv[7] & 0xFF, recv[8] & 0xFF);
 //	printf("Motor 1 Speed: %.2f, Motor 2 Speed: %.2f\n\r", motor_1_speed, motor_2_speed);
@@ -440,16 +513,12 @@ int main(void)
 //	printf("Motor speed: [%f, %f]\n\r", motor_1_speed, motor_2_speed);
 //	printf("circle: %d, square: %d\n\r", circle, square);
 //	printf("Current_L:%f,Current_R:%f,Lower:0,Upper:0.7,Thresh1:0.2,Thresh2:0.27\n\r", motor_1.current_ewma, motor_2.current_ewma);
-	if (motor_1.current_ewma_fast > 0.25) {
-		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
-	} else {
-		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
-	}
+
 	int16_t enc1 = motor_1.get_encoder_count();
 	int16_t enc2 = motor_2.get_encoder_count();
 	slip = enc1 + enc2;
 //	printf("Encoder counts: [%d, %d]\n\r", enc1, enc2);
-	printf("enc1:%d,enc2:%d,slip:%d\n\r", enc1, enc2, slip);
+//	printf("enc1:%d,enc2:%d,slip:%d\n\r", enc1, enc2, slip);
 
     HAL_Delay(delay);
   }
