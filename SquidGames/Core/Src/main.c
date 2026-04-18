@@ -320,6 +320,86 @@ typedef enum {
 	MOVE_RIGHT
 } ExploreState;
 
+ExploreState explore_update(ExploreState es) {
+	float motor_1_speed = 0.0f, motor_2_speed = 0.0f;
+//	printf("State: %d\n\r", es);
+	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+	switch (es) {
+	case START_LEFT:
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
+		// stop motors
+		for (int i = 0; i < 20; ++i) {
+			set_pwm(&motor_1, 0);
+			set_pwm(&motor_2, 0);
+			printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+			HAL_Delay(5);
+		}
+		motor_1_speed = -0.2;
+		motor_2_speed = 0.18;
+		es = MOVE_LEFT;
+		for (int i = 0; i < 90; ++i) {
+			set_pwm(&motor_1, motor_1_speed);
+			set_pwm(&motor_2, motor_2_speed);
+//			if (i % 10 == 0)
+				printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+			HAL_Delay(5);
+		}
+//		HAL_Delay(450);
+		break;
+
+	case MOVE_LEFT:
+//		printf("Motor 1 EWMA: %.2f\n\r", motor_1.current_ewma_fast);
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
+		if (motor_1.current_ewma_fast > 0.29) {
+			motor_1_speed = 0;
+			motor_2_speed = 0;
+			es = START_RIGHT;
+		} else {
+			motor_1_speed = -0.2;
+			motor_2_speed = 0.18;
+		}
+		break;
+
+	case START_RIGHT:
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
+		// stop motors
+		for (int i = 0; i < 20; ++i) {
+			set_pwm(&motor_1, 0);
+			set_pwm(&motor_2, 0);
+			printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+			HAL_Delay(5);
+		}
+		motor_2_speed = -0.2;
+		motor_1_speed = 0.18;
+		es = MOVE_RIGHT;
+		for (int i = 0; i < 90; ++i) {
+			set_pwm(&motor_1, motor_1_speed);
+			set_pwm(&motor_2, motor_2_speed);
+//			if (i % 10 == 0)
+				printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+			HAL_Delay(5);
+		}
+//		HAL_Delay(450);
+		break;
+
+	case MOVE_RIGHT:
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
+//		printf("Motor 2 EWMA: %.2f\n\r", motor_2.current_ewma_fast);
+		if (motor_2.current_ewma_fast > 0.29) {
+			motor_1_speed = 0;
+			motor_2_speed = 0;
+			es = START_LEFT;
+		} else {
+			motor_2_speed = -0.2;
+			motor_1_speed = 0.18;
+		}
+		break;
+	}
+	set_pwm(&motor_1, motor_1_speed);
+	set_pwm(&motor_2, motor_2_speed);
+	return es;
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -407,7 +487,8 @@ int main(void)
   uint8_t recv[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
   spi_transaction(send, recv, 9);
   ControllerState cs;
-  ExploreState es = START_LEFT;
+  ExploreState es = START_RIGHT;
+  int explore_enabled = 1;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -420,6 +501,11 @@ int main(void)
     /* USER CODE BEGIN 3 */
 //	update_motor(&motor_2, set_point);
 //	update_motor(&motor_1, set_point);
+	if (explore_enabled) {
+		es = explore_update(es);
+		HAL_Delay(delay);
+		continue;
+	}
 
 	// returns 0 if controller is in digital mode (invalid)
 	if (!get_controller_state(&cs)) {
@@ -430,79 +516,20 @@ int main(void)
 	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.get_current(), motor_2.get_current());
 
 
-	float motor_1_speed = 0.0f, motor_2_speed = 0.0f;
-//	printf("State: %d\n\r", es);
-	switch (es) {
-	case START_LEFT:
-		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
-		motor_1_speed = -0.2;
-		motor_2_speed = 0.18;
-		es = MOVE_LEFT;
-		for (int i = 0; i < 90; ++i) {
-			set_pwm(&motor_1, motor_1_speed);
-			set_pwm(&motor_2, motor_2_speed);
-//			if (i % 10 == 0)
-				printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
-			HAL_Delay(delay);
-		}
-//		HAL_Delay(450);
-		break;
 
-	case MOVE_LEFT:
-//		printf("Motor 1 EWMA: %.2f\n\r", motor_1.current_ewma_fast);
-		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
-		if (motor_1.current_ewma_fast > 0.27) {
-			motor_1_speed = 0;
-			motor_2_speed = 0;
-			es = START_RIGHT;
-		} else {
-			motor_1_speed = -0.2;
-			motor_2_speed = 0.18;
-		}
-		break;
-
-	case START_RIGHT:
-		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
+	float motor_1_speed = 0.f, motor_2_speed = 0.f;
+	if (!cs.circle && !cs.square) {
+		joystick_to_motor(cs.joy_1_y, cs.joy_2_y, &motor_1_speed, &motor_2_speed, ADVANCED);
+	} else if (cs.circle && !cs.square) { // move right
 		motor_2_speed = -0.2;
 		motor_1_speed = 0.18;
-		es = MOVE_RIGHT;
-		for (int i = 0; i < 90; ++i) {
-			set_pwm(&motor_1, motor_1_speed);
-			set_pwm(&motor_2, motor_2_speed);
-//			if (i % 10 == 0)
-				printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
-			HAL_Delay(delay);
-		}
-//		HAL_Delay(450);
-		break;
-
-	case MOVE_RIGHT:
-		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
-//		printf("Motor 2 EWMA: %.2f\n\r", motor_2.current_ewma_fast);
-		if (motor_2.current_ewma_fast > 0.27) {
-			motor_1_speed = 0;
-			motor_2_speed = 0;
-			es = START_LEFT;
-		} else {
-			motor_2_speed = -0.2;
-			motor_1_speed = 0.18;
-		}
-		break;
+	} else if (cs.square && !cs.circle) { // move left
+		motor_1_speed = -0.2;
+		motor_2_speed = 0.18;
+	} else {
+		motor_1_speed = 0;
+		motor_2_speed = 0;
 	}
-
-//	float motor_1_speed = 0.f, motor_2_speed = 0.f;
-//	if (!cs.circle && !cs.square) {
-//		joystick_to_motor(cs.joy_1_y, cs.joy_2_y, &motor_1_speed, &motor_2_speed, ADVANCED);
-//	} else if (cs.circle && !cs.square) { // move right
-//		motor_2_speed = -0.2;
-//		motor_1_speed = 0.18;
-//	} else if (cs.square && !cs.circle) { // move left
-//		motor_1_speed = -0.2;
-//		motor_2_speed = 0.18;
-//	} else {
-//		motor_1_speed = 0;
-//		motor_2_speed = 0;
-//	}
 
 //	printf("0: %02X, 1: %02X, 2: %02X, 3: %02X, 4: %02X, 5: %02X, 6: %02X, 7: %02X, 8: %02X,\n\r", recv[0] & 0xFF, recv[1] & 0xFF, recv[2] & 0xFF, recv[3] & 0xFF, recv[4] & 0xFF, recv[5] & 0xFF, recv[6] & 0xFF, recv[7] & 0xFF, recv[8] & 0xFF);
 //	printf("Motor 1 Speed: %.2f, Motor 2 Speed: %.2f\n\r", motor_1_speed, motor_2_speed);
