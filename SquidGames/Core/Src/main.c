@@ -51,7 +51,7 @@ typedef struct {
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define PPR 12.0f
+#define PPR 16.0f
 #define GEAR_RATIO 16.0f // ~4*4 = ~16 encoder revolutions for a motor output revolution
 #define CPR (PPR * GEAR_RATIO * 4.0f)
 //#define DT
