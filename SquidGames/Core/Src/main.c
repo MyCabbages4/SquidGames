@@ -40,6 +40,7 @@ typedef struct {
 	PID pos_gains;
 	PID vel_gains;
 	int32_t encoder_count;
+	int32_t last_count;
 	uint32_t pos_ch;
 	uint32_t neg_ch;
 	uint8_t id;
@@ -78,8 +79,6 @@ volatile int32_t encoder_count = 0;
 volatile float revolutions = 0;
 volatile float degrees = 0;
 volatile int deg = 0;
-volatile uint32_t last_count = 0;
-uint32_t prev_cnt = 0;
 Motor motor_1;
 Motor motor_2;
 
@@ -152,8 +151,8 @@ float get_velocity(Motor* m) {
 //	printf("Revolutions:%.2f\n\r", revolutions);
 
 	int32_t current = __HAL_TIM_GET_COUNTER(&htim1);
-	int32_t delta = current - last_count;
-	last_count = current;
+	int32_t delta = current - m->last_count;
+	m->last_count = current;
 
 	if (delta > 32767) delta -= 65536;
 	if (delta < -32768) delta += 65536;
