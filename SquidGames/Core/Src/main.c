@@ -44,6 +44,7 @@ typedef struct {
 	uint32_t neg_ch;
 	uint8_t id;
 	float current_ewma;
+	float current_ewma_fast;
 } Motor;
 
 typedef struct {
@@ -61,6 +62,7 @@ typedef struct {
 #define MAX_CURRENT 1.0f // max current for each motor (Amps)
 #define MAX_SLIP 2500
 #define ALPHA 0.1 // for current EWMA
+#define ALPHA2 0.5 // another, more responsive EWMA for detecting contact
 #define SPEED_MUL 0.35
 
 /* USER CODE END PD */
@@ -160,6 +162,7 @@ void set_pwm(Motor* m, float duty_cycle_percent) {
 	// update ewma
 	float current_now = m->get_current();
 	m->current_ewma = (1-ALPHA) * m->current_ewma + ALPHA * current_now;
+	m->current_ewma_fast = (1-ALPHA2) * m->current_ewma_fast + ALPHA2 * current_now;
 	// this is essentially a P controller
 	float current_effort = (MAX_CURRENT - m->current_ewma);
 	if (current_effort < 0) current_effort = 0; // we want to avoid weirdness if current is over max value
@@ -437,6 +440,11 @@ int main(void)
 //	printf("Motor speed: [%f, %f]\n\r", motor_1_speed, motor_2_speed);
 //	printf("circle: %d, square: %d\n\r", circle, square);
 //	printf("Current_L:%f,Current_R:%f,Lower:0,Upper:0.7,Thresh1:0.2,Thresh2:0.27\n\r", motor_1.current_ewma, motor_2.current_ewma);
+	if (motor_1.current_ewma_fast > 0.25) {
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
+	} else {
+		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
+	}
 	int16_t enc1 = motor_1.get_encoder_count();
 	int16_t enc2 = motor_2.get_encoder_count();
 	slip = enc1 + enc2;
