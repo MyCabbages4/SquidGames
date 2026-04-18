@@ -51,7 +51,7 @@ typedef struct {
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define PPR 20.0f
+#define PPR 12.0f
 #define GEAR_RATIO 16.0f // ~4*4 = ~16 encoder revolutions for a motor output revolution
 #define CPR (PPR * GEAR_RATIO * 4.0f)
 //#define DT
@@ -147,7 +147,11 @@ float pid(Motor* m, float target, float set_point) {
 }
 
 float get_velocity(Motor* m) {
-	int32_t current = m->encoder_count;
+	// For testing
+	float revolutions = (float)m->encoder_count / CPR;
+	printf("Revolutions:%.2f\n\r", revolutions);
+
+	int32_t current = __HAL_TIM_GET_COUNTER(&htim1);
 	int32_t delta = current - last_count;
 	last_count = current;
 
@@ -161,8 +165,9 @@ float get_velocity(Motor* m) {
 
 void control(Motor* m) {
 	float vel = get_velocity(m);
-	float duty_cycle = pid(m, m->set_duty_cycle, vel);
-	set_pwm(m, duty_cycle);
+	m->velocity = vel;
+//	float duty_cycle = pid(m, m->set_duty_cycle, vel);
+//	set_pwm(m, duty_cycle);
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
@@ -197,12 +202,12 @@ void update_motor_pos(Motor* m, float set_point) {
 	float degrees = revolutions * 360.0f;
 	float error = set_point - degrees;
 	if (degrees >= 90.0) {
-		printf("Pos%d:%.2f\n\r", m->id, degrees);
+//		printf("Pos%d:%.2f\n\r", m->id, degrees);
 		set_pwm(m, 0);
 		return;
 	}
-	printf("Error%d:%.2f ", m->id, error);
-	printf("Pos%d:%.2f\n\r", m->id, degrees);
+//	printf("Error%d:%.2f ", m->id, error);
+//	printf("Pos%d:%.2f\n\r", m->id, degrees);
 
 	// Update PID
 	float P = m->pos_gains.kp * error;
@@ -231,7 +236,7 @@ void update_motor_pos(Motor* m, float set_point) {
 		output = 1.0f;
 	}
 
-	printf("Output:%.2f,P:%.4f\n\r", output, P);
+//	printf("Output:%.2f,P:%.4f\n\r", output, P);
 
 	set_pwm(m, output);
 }
@@ -338,15 +343,17 @@ int main(void)
 //	update_motor_pos(&motor_1, set_point);
 //	set_pwm(&motor_1, 0.2);
 
-	set_pwm(&motor_1, kafjlafkj);
-	kafjlafkj += add;
-	if (kafjlafkj > 1) {
-		add = -0.1f;
-	} else if (kafjlafkj < -1) {
-		add = 0.1f;
-	}
+//	set_pwm(&motor_1, kafjlafkj);
+	set_pwm(&motor_1, 0.25);
+//	printf("Dummy1:%d,Dummy2:%d,Motor_1_Vel:%.2f\n\r", -135, 135, motor_1.velocity);
+//	kafjlafkj += add;
+//	if (kafjlafkj > 1) {
+//		add = -0.1f;
+//	} else if (kafjlafkj < -1) {
+//		add = 0.1f;
+//	}
 //	set_pwm(&motor_2, -0.2);
-    HAL_Delay((int)delay);
+//    HAL_Delay((int)delay);
   }
   /* USER CODE END 3 */
 }
