@@ -148,8 +148,8 @@ float pid(Motor* m, float target, float set_point) {
 
 float get_velocity(Motor* m) {
 	// For testing
-	float revolutions = (float)m->encoder_count / CPR;
-	printf("Revolutions:%.2f\n\r", revolutions);
+//	float revolutions = (float)m->encoder_count / CPR;
+//	printf("Revolutions:%.2f\n\r", revolutions);
 
 	int32_t current = __HAL_TIM_GET_COUNTER(&htim1);
 	int32_t delta = current - last_count;
@@ -157,8 +157,9 @@ float get_velocity(Motor* m) {
 
 	if (delta > 32767) delta -= 65536;
 	if (delta < -32768) delta += 65536;
+//	printf("Delta:%d\n\r", delta);
 
-	float rpm = (((float)delta / CPR)) / DT;
+	float rpm = (((float)delta / CPR)) / DT * 60.f;
 
 	return rpm;
 }
@@ -345,7 +346,7 @@ int main(void)
 
 //	set_pwm(&motor_1, kafjlafkj);
 	set_pwm(&motor_1, 0.25);
-//	printf("Dummy1:%d,Dummy2:%d,Motor_1_Vel:%.2f\n\r", -135, 135, motor_1.velocity);
+//	printf("Dummy1:%d,Dummy2:%d,Motor_1_Vel:%.2f,Encoder:%d\n\r", -135, 135, motor_1.velocity, motor_1.encoder_count);
 //	kafjlafkj += add;
 //	if (kafjlafkj > 1) {
 //		add = -0.1f;
