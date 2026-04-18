@@ -46,6 +46,11 @@ typedef struct {
 	float current_ewma;
 } Motor;
 
+typedef struct {
+	float joy_1_y, joy_2_y;
+	uint8_t square, circle;
+} ControllerState;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -56,6 +61,7 @@ typedef struct {
 #define MAX_CURRENT 1.0f // max current for each motor (Amps)
 #define MAX_SLIP 2500
 #define ALPHA 0.1 // for current EWMA
+#define SPEED_MUL 0.35
 
 /* USER CODE END PD */
 
@@ -230,6 +236,8 @@ typedef enum {
 } ControllerMode;
 
 void joystick_to_motor(float input1, float input2, float* motor_1_speed, float* motor_2_speed, ControllerMode mode) {
+	// motor 1 is on the left, motor 2 is on the right
+	// negative is pulling on the string, positive is releasing tension
 	switch (mode) {
 		case EXPERT:
 			*motor_1_speed = input1;
@@ -279,6 +287,28 @@ void joystick_to_motor(float input1, float input2, float* motor_1_speed, float* 
 	}
 }
 
+int get_controller_state(ControllerState* state) {
+	uint8_t send[] = {0x01, 0x42, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+	uint8_t recv[9];
+	spi_transaction(send, recv, 9);
+	if (recv[1] != 0x73) { // Don't do anything if we are in digital mode
+		printf("Controller in digital mode!\n\r");
+		return 0;
+	}
+	state->circle = !((recv[4] >> 5) & 1);
+	state->square = !(recv[4] >> 7);
+
+	state->joy_1_y = -(((float)recv[8] - 127.5f) / 127.5f) * SPEED_MUL;
+	state->joy_2_y = -(((float)recv[6] - 127.5f) / 127.5f) * SPEED_MUL;
+	// deadzone
+	if (116 < recv[8] && recv[8] < 150) {
+		state->joy_1_y = 0.0f;
+	}
+	if (117 < recv[6] && recv[6] < 127) {
+		state->joy_2_y = 0.0f;
+	}
+	return 1;
+}
 
 /* USER CODE END 0 */
 
@@ -361,12 +391,10 @@ int main(void)
   int delay = 5;
 
   // Configure controller to be analog
-  float speed_mul = 0.35f;
   uint8_t send[] = {0x01, 0x43, 0x44, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
   uint8_t recv[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
   spi_transaction(send, recv, 9);
-  send[1] = 0x42;
-  send[2] = 0x00;
+  ControllerState cs;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -380,35 +408,19 @@ int main(void)
 //	update_motor(&motor_2, set_point);
 //	update_motor(&motor_1, set_point);
 
-	spi_transaction(send, recv, 9);
-	if (recv[1] != 0x73) {
-		printf("Controller in digital mode!\n\r");
+	// returns 0 if controller is in digital mode (invalid)
+	if (!get_controller_state(&cs)) {
 		HAL_Delay(10);
-		continue; // Don't do anything if we are in digital mode
+		continue;
 	}
-	uint8_t circle = !((recv[4] >> 5) & 1);
-	uint8_t square = !(recv[4] >> 7);
-	// motor 1 is on the left, motor 2 is on the right
-	// negative is pulling on the string, positive is releasing tension
+
 	float motor_1_speed = 0.f, motor_2_speed = 0.f;
-	if (!circle && !square) {
-		float left_joystick = -(((float)recv[8] - 127.5f) / 127.5f) * speed_mul;
-		float right_joystick = -(((float)recv[6] - 127.5f) / 127.5f) * speed_mul;
-		if (116 < recv[8] && recv[8] < 150) {
-			left_joystick = 0.0f;
-		}
-
-		if (117 < recv[6] && recv[6] < 127) {
-			right_joystick = 0.0f;
-		}
-
-	//	float motor_1_speed = -(((float)recv[8] - 127.5f) / 127.5f) * speed_mul;
-	//	float motor_2_speed = -(((float)recv[6] - 127.5f) / 127.5f) * speed_mul;
-		joystick_to_motor(left_joystick, right_joystick, &motor_1_speed, &motor_2_speed, PULL_ONLY);
-	} else if (circle && !square) { // move right
+	if (!cs.circle && !cs.square) {
+		joystick_to_motor(cs.joy_1_y, cs.joy_2_y, &motor_1_speed, &motor_2_speed, ADVANCED);
+	} else if (cs.circle && !cs.square) { // move right
 		motor_2_speed = -0.2;
 		motor_1_speed = 0.18;
-	} else if (square && !circle) { // move left
+	} else if (cs.square && !cs.circle) { // move left
 		motor_1_speed = -0.2;
 		motor_2_speed = 0.18;
 	} else {
