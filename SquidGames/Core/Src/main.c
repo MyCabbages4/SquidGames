@@ -344,7 +344,7 @@ int update_controller_state() {
 	uint8_t recv[9];
 	spi_transaction(send, recv, 9);
 	if (recv[1] != 0x73) { // Don't do anything if we are in digital mode
-//		printf("Controller in digital mode!\n\r");
+		printf("Controller in digital mode!\n\r");
 		return 0;
 	}
 
@@ -552,8 +552,8 @@ int main(void)
   // Initialize motors
   motor_1.pos_ch = TIM_CHANNEL_2;
   motor_1.neg_ch = TIM_CHANNEL_3;
-  motor_2.pos_ch = TIM_CHANNEL_1;
-  motor_2.neg_ch = TIM_CHANNEL_4;
+  motor_2.pos_ch = TIM_CHANNEL_4;
+  motor_2.neg_ch = TIM_CHANNEL_1;
   tune_motor_1();
   tune_motor_2();
   motor_1.id = 1;
@@ -584,6 +584,7 @@ int main(void)
 
   ExploreState es = START_RIGHT;
   int explore_enabled = 0;
+  int gyro_control = 1;
 
   // Communicate with Wrist Mount
   HAL_NVIC_SetPriority(USART2_IRQn, 0, 0);
@@ -603,6 +604,15 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	float motor_1_speed = 0.f, motor_2_speed = 0.f;
+	if (gyro_control) {
+//		printf("Roll: %f, pitch: %f\n\r", -roll, pitch);
+		joystick_to_motor(-roll * SPEED_MUL, pitch * SPEED_MUL, &motor_1_speed, &motor_2_speed, LEFT_RIGHT);
+		set_pwm(&motor_1, motor_1_speed);
+		set_pwm(&motor_2, motor_2_speed);
+		HAL_Delay(delay);
+		continue;
+	}
   // returns 0 if controller is in digital mode (invalid)
 	if (!update_controller_state()) {
 		set_pwm(&motor_1, 0);
@@ -622,9 +632,8 @@ int main(void)
 //	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 //	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.get_current(), motor_2.get_current());
 
-	float motor_1_speed = 0.f, motor_2_speed = 0.f;
 	if (!cs.circle && !cs.square) {
-		joystick_to_motor(cs.joy_1_y, cs.joy_2_y, &motor_1_speed, &motor_2_speed, LEFT_RIGHT);
+		joystick_to_motor(cs.joy_1_y, cs.joy_2_y, &motor_1_speed, &motor_2_speed, ADVANCED);
 	} else if (cs.circle && !cs.square) { // move right
 		motor_2_speed = -0.3;
 		motor_1_speed = 0.27;
