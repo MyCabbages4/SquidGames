@@ -64,6 +64,7 @@ static void MX_LPUART1_UART_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 uint8_t gyroAddr = 0x28 << 1;
+float UARTBuffer[2];
 uint8_t buffer[8];
 int16_t X_Offset;
 int16_t Y_Offset;
@@ -195,9 +196,10 @@ int main(void)
 
 	printf("roll: %.2f, pitch: %.2f, X: %d, Y: %d, Z: %d\r\n", roll, pitch, X + X_Offset,Y + Y_Offset,Z + Z_Offset);
 
-	memcpy(buffer, &roll, sizeof(float));
-	memcpy(buffer + 4, &pitch, sizeof(float));
-	HAL_UART_Transmit(&huart1, buffer, sizeof(buffer), HAL_MAX_DELAY);
+	UARTBuffer[0] = roll;
+	UARTBuffer[1] = pitch;
+
+	HAL_UART_Transmit(&huart1, (void*)&UARTBuffer, 8, HAL_MAX_DELAY);
 	HAL_Delay(50);
 //	printf("angle: %.2f\r\n", angle);
 
