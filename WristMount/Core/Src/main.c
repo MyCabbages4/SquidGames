@@ -198,6 +198,7 @@ int main(void)
 	memcpy(buffer, &roll, sizeof(float));
 	memcpy(buffer + 4, &pitch, sizeof(float));
 	HAL_UART_Transmit(&huart1, buffer, sizeof(buffer), HAL_MAX_DELAY);
+	HAL_Delay(50);
 //	printf("angle: %.2f\r\n", angle);
 
     /* USER CODE END WHILE */
