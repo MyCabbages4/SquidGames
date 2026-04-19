@@ -63,7 +63,7 @@ static void MX_LPUART1_UART_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 uint8_t gyroAddr = 0x28 << 1;
-uint8_t buffer[6];
+uint8_t buffer[8];
 int16_t X_Offset;
 int16_t Y_Offset;
 int16_t Z_Offset;
@@ -163,10 +163,40 @@ int main(void)
 	Y = *(buffer + 2) | (*(buffer + 3) << 8);
 	Z = *(buffer + 4) | (*(buffer + 5) << 8);
 
-	float angle = (180.0/M_PI) * atan2(X, Z);
+	float roll = (180.0/M_PI) * atan2(X, Z);
+	float pitch = (180.0/M_PI) * atan2(Y, Z);
 
-	printf("angle: %.2f, X: %d, Y: %d, Z: %d\r\n", *angle, X + X_Offset,Y + Y_Offset,Z + Z_Offset);
-	HAL_UART_Transmit(&huart1, &angle, sizeof(angle), 10);
+	// Clip Roll
+	if (roll < 25.0 && roll > -25.0) {
+		roll = 0;
+	}
+	else if (roll > 90.0) {
+		roll = 1;
+	}
+	else if (roll < -90.0) {
+		roll = -1;
+	} else {
+		roll = roll / 90.0;
+	}
+
+	// Clip Pitch
+	if (pitch < 10.0 && pitch > -10.0) {
+		pitch = 0;
+	}
+	else if (pitch > 60.0) {
+		pitch = 1;
+	}
+	else if (pitch < -60.0) {
+		pitch = -1;
+	} else {
+		pitch = pitch / 60.0;
+	}
+
+	printf("roll: %.2f, pitch: %.2f, X: %d, Y: %d, Z: %d\r\n", roll, pitch, X + X_Offset,Y + Y_Offset,Z + Z_Offset);
+
+	*buffer = roll;
+	*(buffer + 4) = pitch;
+	HAL_UART_Transmit(&huart1, buffer, sizeof(buffer), 10);
 //	printf("angle: %.2f\r\n", angle);
 
     /* USER CODE END WHILE */
