@@ -50,6 +50,8 @@ typedef struct {
 typedef struct {
 	float joy_1_y, joy_2_y;
 	uint8_t square, circle;
+	uint8_t dpad_up, dpad_down;
+	uint8_t dpad_left, dpad_right;
 } ControllerState;
 
 /* USER CODE END PTD */
@@ -89,6 +91,9 @@ TIM_HandleTypeDef htim3;
 /* USER CODE BEGIN PV */
 Motor motor_1;
 Motor motor_2;
+
+ControllerState cs = {0.0f, 0.0f, 0, 0, 0, 0, 0, 0};
+ControllerState last_state = {0.0f, 0.0f, 0, 0, 0, 0, 0, 0};
 uint16_t adc_vals[2];
 int slip = 0;
 
@@ -106,6 +111,7 @@ static void MX_SPI1_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_SPI3_Init(void);
 /* USER CODE BEGIN PFP */
+void update_ewma_limits(void);
 
 /* USER CODE END PFP */
 
@@ -290,7 +296,7 @@ void joystick_to_motor(float input1, float input2, float* motor_1_speed, float* 
 	}
 }
 
-int get_controller_state(ControllerState* state) {
+int update_controller_state() {
 	uint8_t send[] = {0x01, 0x42, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 	uint8_t recv[9];
 	spi_transaction(send, recv, 9);
@@ -298,18 +304,36 @@ int get_controller_state(ControllerState* state) {
 		printf("Controller in digital mode!\n\r");
 		return 0;
 	}
-	state->circle = !((recv[4] >> 5) & 1);
-	state->square = !(recv[4] >> 7);
 
-	state->joy_1_y = -(((float)recv[8] - 127.5f) / 127.5f) * SPEED_MUL;
-	state->joy_2_y = -(((float)recv[6] - 127.5f) / 127.5f) * SPEED_MUL;
+	last_state.joy_1_y = cs.joy_1_y;
+	last_state.joy_2_y = cs.joy_2_y;
+	last_state.square = cs.square;
+	last_state.circle = cs.circle;
+	last_state.dpad_up = cs.dpad_up;
+	last_state.dpad_down = cs.dpad_down;
+	last_state.dpad_left = cs.dpad_left;
+	last_state.dpad_right = cs.dpad_right;
+
+	cs.circle = !((recv[4] >> 5) & 1);
+	cs.square = !(recv[4] >> 7);
+	cs.dpad_left = !(recv[3] >> 7);
+	cs.dpad_right = !((recv[3] >> 5) & 1);
+	cs.dpad_up = !((recv[3] >> 4) & 1);
+	cs.dpad_down = !((recv[3] >> 6) & 1);
+
+	cs.joy_1_y = -(((float)recv[8] - 127.5f) / 127.5f) * SPEED_MUL;
+	cs.joy_2_y = -(((float)recv[6] - 127.5f) / 127.5f) * SPEED_MUL;
+
 	// deadzone
 	if (116 < recv[8] && recv[8] < 150) {
-		state->joy_1_y = 0.0f;
+		cs.joy_1_y = 0.0f;
 	}
 	if (117 < recv[6] && recv[6] < 127) {
-		state->joy_2_y = 0.0f;
+		cs.joy_2_y = 0.0f;
 	}
+
+	update_ewma_limits();
+
 	return 1;
 }
 
@@ -320,10 +344,30 @@ typedef enum {
 	MOVE_RIGHT
 } ExploreState;
 
+float motor_1_ewma_limit = 0.29f;
+float motor_2_ewma_limit = 0.29f;
+
+void update_ewma_limits() {
+	// Update ewma limits: motor_1 = dpad_left/right; motor_2 = dpad_up/down
+	if (cs.dpad_right && !last_state.dpad_right) {
+		motor_1_ewma_limit += 0.01f;
+	} else if (cs.dpad_left && !last_state.dpad_left) {
+		if (motor_1_ewma_limit > 0.0f)
+			motor_1_ewma_limit -= 0.01f;
+	}
+
+	if (cs.dpad_up && !last_state.dpad_up) {
+		motor_2_ewma_limit += 0.01f;
+	} else if (cs.dpad_down && !last_state.dpad_down) {
+		if (motor_2_ewma_limit > 0.0f)
+			motor_2_ewma_limit -= 0.01f;
+	}
+}
+
 ExploreState explore_update(ExploreState es) {
 	float motor_1_speed = 0.0f, motor_2_speed = 0.0f;
-//	printf("State: %d\n\r", es);
-	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+	printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
+//	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 	switch (es) {
 	case START_LEFT:
 		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
@@ -331,7 +375,8 @@ ExploreState explore_update(ExploreState es) {
 		for (int i = 0; i < 20; ++i) {
 			set_pwm(&motor_1, 0);
 			set_pwm(&motor_2, 0);
-			printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+			printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
+//			printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 			HAL_Delay(5);
 		}
 		motor_1_speed = -0.2;
@@ -341,7 +386,8 @@ ExploreState explore_update(ExploreState es) {
 			set_pwm(&motor_1, motor_1_speed);
 			set_pwm(&motor_2, motor_2_speed);
 //			if (i % 10 == 0)
-				printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+			printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
+//				printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 			HAL_Delay(5);
 		}
 //		HAL_Delay(450);
@@ -350,7 +396,7 @@ ExploreState explore_update(ExploreState es) {
 	case MOVE_LEFT:
 //		printf("Motor 1 EWMA: %.2f\n\r", motor_1.current_ewma_fast);
 		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
-		if (motor_1.current_ewma_fast > 0.29) {
+		if (motor_1.current_ewma_fast > motor_1_ewma_limit) {
 			motor_1_speed = 0;
 			motor_2_speed = 0;
 			es = START_RIGHT;
@@ -366,7 +412,8 @@ ExploreState explore_update(ExploreState es) {
 		for (int i = 0; i < 20; ++i) {
 			set_pwm(&motor_1, 0);
 			set_pwm(&motor_2, 0);
-			printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+			printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
+//			printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 			HAL_Delay(5);
 		}
 		motor_2_speed = -0.2;
@@ -376,7 +423,8 @@ ExploreState explore_update(ExploreState es) {
 			set_pwm(&motor_1, motor_1_speed);
 			set_pwm(&motor_2, motor_2_speed);
 //			if (i % 10 == 0)
-				printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+			printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
+//				printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 			HAL_Delay(5);
 		}
 //		HAL_Delay(450);
@@ -385,7 +433,7 @@ ExploreState explore_update(ExploreState es) {
 	case MOVE_RIGHT:
 		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
 //		printf("Motor 2 EWMA: %.2f\n\r", motor_2.current_ewma_fast);
-		if (motor_2.current_ewma_fast > 0.29) {
+		if (motor_2.current_ewma_fast > motor_2_ewma_limit) {
 			motor_1_speed = 0;
 			motor_2_speed = 0;
 			es = START_LEFT;
@@ -482,11 +530,6 @@ int main(void)
 
   int delay = 5;
 
-  // Configure controller to be analog
-  uint8_t send[] = {0x01, 0x43, 0x44, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-  uint8_t recv[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-  spi_transaction(send, recv, 9);
-  ControllerState cs;
   ExploreState es = START_RIGHT;
   int explore_enabled = 1;
   /* USER CODE END 2 */
@@ -499,6 +542,12 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+  // returns 0 if controller is in digital mode (invalid)
+	if (!update_controller_state()) {
+		HAL_Delay(10);
+		continue;
+	}
+
 //	update_motor(&motor_2, set_point);
 //	update_motor(&motor_1, set_point);
 	if (explore_enabled) {
@@ -507,15 +556,8 @@ int main(void)
 		continue;
 	}
 
-	// returns 0 if controller is in digital mode (invalid)
-	if (!get_controller_state(&cs)) {
-		HAL_Delay(10);
-		continue;
-	}
 //	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
-	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.get_current(), motor_2.get_current());
-
-
+//	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.get_current(), motor_2.get_current());
 
 	float motor_1_speed = 0.f, motor_2_speed = 0.f;
 	if (!cs.circle && !cs.square) {
