@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include "stdio.h"
 #include "math.h"
+#include "string.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -194,8 +195,8 @@ int main(void)
 
 	printf("roll: %.2f, pitch: %.2f, X: %d, Y: %d, Z: %d\r\n", roll, pitch, X + X_Offset,Y + Y_Offset,Z + Z_Offset);
 
-	*buffer = roll;
-	*(buffer + 4) = pitch;
+	memcpy(buffer, &roll, sizeof(float));
+	memcpy(buffer + 4, &pitch, sizeof(float));
 	HAL_UART_Transmit(&huart1, buffer, sizeof(buffer), HAL_MAX_DELAY);
 //	printf("angle: %.2f\r\n", angle);
 
