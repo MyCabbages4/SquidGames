@@ -496,9 +496,11 @@ int main(void)
   spi_transaction(send, recv, 9);
   ControllerState cs;
   ExploreState es = START_RIGHT;
-  int explore_enabled = 1;
+  int explore_enabled = 0;
 
   // Communicate with Wrist Mount
+  HAL_NVIC_SetPriority(USART2_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(USART2_IRQn);
   HAL_UART_Receive_IT(&huart2, UARTBuffer, sizeof(UARTBuffer));
   /* USER CODE END 2 */
 
