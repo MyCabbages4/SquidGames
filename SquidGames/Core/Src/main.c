@@ -1270,8 +1270,8 @@ PUTCHAR_PROTOTYPE
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
     if (huart == &huart2) {
-    	roll = *UARTBuffer;
-    	pitch = *(UARTBuffer);
+    	memcpy(&roll, UARTBuffer, sizeof(float));
+		memcpy(&pitch, UARTBuffer + 4, sizeof(float));
 
     	printf("roll: %.2f, pitch: %.2f\r\n", roll, pitch);
         HAL_UART_Receive_IT(&huart2, UARTBuffer, sizeof(UARTBuffer));
