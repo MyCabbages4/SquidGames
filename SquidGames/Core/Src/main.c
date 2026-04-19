@@ -402,6 +402,10 @@ ExploreState explore_update(ExploreState es) {
 	return es;
 }
 
+// Bluetooth Data
+uint8_t UARTBuffer[8];
+float roll = 0;
+float pitch = 0;
 /* USER CODE END 0 */
 
 /**
@@ -492,6 +496,9 @@ int main(void)
   ControllerState cs;
   ExploreState es = START_RIGHT;
   int explore_enabled = 1;
+
+  // Communicate with Wrist Mount
+  HAL_UART_Receive_IT(&huart2, UARTBuffer, sizeof(UARTBuffer));
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -1259,6 +1266,22 @@ PUTCHAR_PROTOTYPE
 {
   HAL_UART_Transmit(&hlpuart1, (uint8_t *)&ch, 1, 0xFFFF);
   return ch;
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+    if (huart == &huart2) {
+    	roll = *UARTBuffer;
+    	pitch = *(UARTBuffer);
+
+    	printf("roll: %.2f, pitch: %.2f\r\n", roll, pitch);
+        HAL_UART_Receive_IT(&huart2, UARTBuffer, sizeof(UARTBuffer));
+    }
+}
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
+    if (huart == &huart2) {
+        // Re-arm the receiver
+        HAL_UART_Receive_IT(&huart2, UARTBuffer, sizeof(UARTBuffer));
+    }
 }
 /* USER CODE END 4 */
 
