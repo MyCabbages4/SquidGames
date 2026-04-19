@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include "stdio.h"
 #include "string.h"
+#include <math.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -35,6 +36,8 @@ typedef struct {
 	float prev_error;
 	float output;
 	float integral_max;
+	float integral_min;
+	float feed_forward;
 } PID;
 
 typedef struct {
@@ -46,11 +49,15 @@ typedef struct {
 	uint8_t id;
 	float current_ewma;
 	float current_ewma_fast;
+	int16_t prev_encoder_count;
+	float set_velocity;
 } Motor;
 
 typedef struct {
 	float joy_1_y, joy_2_y;
 	uint8_t square, circle;
+	uint8_t dpad_up, dpad_down;
+	uint8_t dpad_left, dpad_right;
 } ControllerState;
 
 /* USER CODE END PTD */
@@ -59,12 +66,13 @@ typedef struct {
 /* USER CODE BEGIN PD */
 #define PPR 20.0f
 #define GEAR_RATIO 16.0f // ~4*4 = ~16 encoder revolutions for a motor output revolution
-#define CPR (PPR * GEAR_RATIO * 4.0f)
+#define CPR 1000
 #define MAX_CURRENT 1.0f // max current for each motor (Amps)
 #define MAX_SLIP 2500
 #define ALPHA 0.1 // for current EWMA
 #define ALPHA2 0.5 // another, more responsive EWMA for detecting contact
 #define SPEED_MUL 0.35
+#define DT 0.0065536f	 // Time between each encoder read
 
 /* USER CODE END PD */
 
@@ -87,10 +95,14 @@ DMA_HandleTypeDef hdma_spi3_tx;
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
+TIM_HandleTypeDef htim4;
 
 /* USER CODE BEGIN PV */
 Motor motor_1;
 Motor motor_2;
+
+ControllerState cs = {0.0f, 0.0f, 0, 0, 0, 0, 0, 0};
+ControllerState last_state = {0.0f, 0.0f, 0, 0, 0, 0, 0, 0};
 uint16_t adc_vals[2];
 int slip = 0;
 
@@ -108,7 +120,9 @@ static void MX_SPI1_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_SPI3_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_TIM4_Init(void);
 /* USER CODE BEGIN PFP */
+void update_ewma_limits(void);
 
 /* USER CODE END PFP */
 
@@ -162,6 +176,7 @@ void set_pwm_unsafe(Motor* m, float duty_cycle_percent) {
 
 // set PWM speed but also limit current
 void set_pwm(Motor* m, float duty_cycle_percent) {
+//	printf("Duty Cycle Percent: %f\n\r", duty_cycle_percent);
 	// update ewma
 	float current_now = m->get_current();
 	m->current_ewma = (1-ALPHA) * m->current_ewma + ALPHA * current_now;
@@ -180,24 +195,22 @@ void set_pwm(Motor* m, float duty_cycle_percent) {
 	set_pwm_unsafe(m, sign * min_magnitude);
 }
 
-void update_motor(Motor* m, float set_point) {
-	float revolutions = (float)m->get_encoder_count() / CPR;
-	float degrees = revolutions * 360.0f;
-	float error = set_point - degrees;
-	printf("Error%d:%.2f ", m->id, error);
-	printf("Pos%d:%.2f\n\r", m->id, degrees);
+float pid(Motor* m, float measured, float set_point) {
+	float error = set_point - measured;
+//	 printf("Error:%.2f\n\r", error);
 
-	// Update PID
 	float P = m->gains.kp * error;
-//	printf("P: %.2f\n\r", P);
-	m->gains.integral += error / 100.0f;
-	// TODO: anti-windup
+
+	m->gains.integral += error * DT;
+	m->gains.integral = fmin(m->gains.integral, m->gains.integral_max);
+	m->gains.integral = fmax(m->gains.integral, m->gains.integral_min);
 	float I = m->gains.ki * m->gains.integral;
-	float D = m->gains.kd * (error - m->gains.prev_error) / 100.0f;
+
+	float D = m->gains.kd * (error - m->gains.prev_error) / DT;
 	m->gains.prev_error = error;
 
-	float output = P + I + D;
-//	printf("Output%d:%.4f\n\r", m->id, output);
+	float output = P + I + D + m->gains.feed_forward; // 0.1 is a feedforward term
+
 	if (output < -1) {
 		output = -1.0f;
 	}
@@ -214,16 +227,49 @@ void update_motor(Motor* m, float set_point) {
 		output = 1.0f;
 	}
 
-//	printf("Output:%.2f,P:%.4f\n\r", output, P);
+	return output;
+}
 
-	set_pwm(m, output);
-}
 void tune_motor_1() {
-	  motor_1.gains.kp = 0.001f;
+	  motor_1.gains.kp = 0.01f;
+	  motor_1.gains.ki = 0.002f;
+//	  motor_1.gains.integral_max = 1.0f/motor_1.gains.ki;
+//	  motor_1.gains.integral_min = -1.0f/motor_1.gains.ki;
+//	  motor_1.gains.feed_forward = 0.1f;
 }
+
 void tune_motor_2() {
 	  motor_2.gains.kp = 0.0041f;
 	  motor_2.gains.ki = 0.0f;
+}
+
+float get_velocity(Motor* m) {
+	int32_t count = __HAL_TIM_GET_COUNTER(&htim1);
+	int32_t delta = count - m->prev_encoder_count;
+	m->prev_encoder_count = count;
+
+	if (delta > 32767) delta -= 65536;
+	if (delta < -32768) delta += 65536;
+//	printf("Delta:%d\n\r", delta);
+
+	float rpm = (((float)delta / CPR)) / DT * 60.f;
+
+	return rpm;
+}
+
+void control(Motor* m) {
+	float velocity = get_velocity(m);
+	float duty_cycle = pid(m, velocity, m->set_velocity);
+	set_pwm(m, duty_cycle);
+}
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM4)  // control loop timer at 1kHz
+    {
+//        control(&motor_1);
+        // control(&motor_2);
+    }
 }
 
 void spi_transaction(uint8_t* send, uint8_t* recv, uint32_t n) {
@@ -293,7 +339,7 @@ void joystick_to_motor(float input1, float input2, float* motor_1_speed, float* 
 	}
 }
 
-int get_controller_state(ControllerState* state) {
+int update_controller_state() {
 	uint8_t send[] = {0x01, 0x42, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 	uint8_t recv[9];
 	spi_transaction(send, recv, 9);
@@ -301,18 +347,36 @@ int get_controller_state(ControllerState* state) {
 //		printf("Controller in digital mode!\n\r");
 		return 0;
 	}
-	state->circle = !((recv[4] >> 5) & 1);
-	state->square = !(recv[4] >> 7);
 
-	state->joy_1_y = -(((float)recv[8] - 127.5f) / 127.5f) * SPEED_MUL;
-	state->joy_2_y = -(((float)recv[6] - 127.5f) / 127.5f) * SPEED_MUL;
+	last_state.joy_1_y = cs.joy_1_y;
+	last_state.joy_2_y = cs.joy_2_y;
+	last_state.square = cs.square;
+	last_state.circle = cs.circle;
+	last_state.dpad_up = cs.dpad_up;
+	last_state.dpad_down = cs.dpad_down;
+	last_state.dpad_left = cs.dpad_left;
+	last_state.dpad_right = cs.dpad_right;
+
+	cs.circle = !((recv[4] >> 5) & 1);
+	cs.square = !(recv[4] >> 7);
+	cs.dpad_left = !(recv[3] >> 7);
+	cs.dpad_right = !((recv[3] >> 5) & 1);
+	cs.dpad_up = !((recv[3] >> 4) & 1);
+	cs.dpad_down = !((recv[3] >> 6) & 1);
+
+	cs.joy_1_y = -(((float)recv[8] - 127.5f) / 127.5f) * SPEED_MUL;
+	cs.joy_2_y = -(((float)recv[6] - 127.5f) / 127.5f) * SPEED_MUL;
+
 	// deadzone
 	if (116 < recv[8] && recv[8] < 150) {
-		state->joy_1_y = 0.0f;
+		cs.joy_1_y = 0.0f;
 	}
 	if (117 < recv[6] && recv[6] < 127) {
-		state->joy_2_y = 0.0f;
+		cs.joy_2_y = 0.0f;
 	}
+
+	update_ewma_limits();
+
 	return 1;
 }
 
@@ -323,10 +387,30 @@ typedef enum {
 	MOVE_RIGHT
 } ExploreState;
 
+float motor_1_ewma_limit = 0.29f;
+float motor_2_ewma_limit = 0.29f;
+
+void update_ewma_limits() {
+	// Update ewma limits: motor_1 = dpad_left/right; motor_2 = dpad_up/down
+	if (cs.dpad_right && !last_state.dpad_right) {
+		motor_1_ewma_limit += 0.01f;
+	} else if (cs.dpad_left && !last_state.dpad_left) {
+		if (motor_1_ewma_limit > 0.0f)
+			motor_1_ewma_limit -= 0.01f;
+	}
+
+	if (cs.dpad_up && !last_state.dpad_up) {
+		motor_2_ewma_limit += 0.01f;
+	} else if (cs.dpad_down && !last_state.dpad_down) {
+		if (motor_2_ewma_limit > 0.0f)
+			motor_2_ewma_limit -= 0.01f;
+	}
+}
+
 ExploreState explore_update(ExploreState es) {
 	float motor_1_speed = 0.0f, motor_2_speed = 0.0f;
-//	printf("State: %d\n\r", es);
-	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+	printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
+//	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 	switch (es) {
 	case START_LEFT:
 		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
@@ -334,7 +418,8 @@ ExploreState explore_update(ExploreState es) {
 		for (int i = 0; i < 20; ++i) {
 			set_pwm(&motor_1, 0);
 			set_pwm(&motor_2, 0);
-			printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+			printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
+//			printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 			HAL_Delay(5);
 		}
 		motor_1_speed = -0.2;
@@ -344,7 +429,8 @@ ExploreState explore_update(ExploreState es) {
 			set_pwm(&motor_1, motor_1_speed);
 			set_pwm(&motor_2, motor_2_speed);
 //			if (i % 10 == 0)
-				printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+			printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
+//				printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 			HAL_Delay(5);
 		}
 //		HAL_Delay(450);
@@ -353,7 +439,7 @@ ExploreState explore_update(ExploreState es) {
 	case MOVE_LEFT:
 //		printf("Motor 1 EWMA: %.2f\n\r", motor_1.current_ewma_fast);
 		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
-		if (motor_1.current_ewma_fast > 0.29) {
+		if (motor_1.current_ewma_fast > motor_1_ewma_limit) {
 			motor_1_speed = 0;
 			motor_2_speed = 0;
 			es = START_RIGHT;
@@ -369,7 +455,8 @@ ExploreState explore_update(ExploreState es) {
 		for (int i = 0; i < 20; ++i) {
 			set_pwm(&motor_1, 0);
 			set_pwm(&motor_2, 0);
-			printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+			printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
+//			printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 			HAL_Delay(5);
 		}
 		motor_2_speed = -0.2;
@@ -379,7 +466,8 @@ ExploreState explore_update(ExploreState es) {
 			set_pwm(&motor_1, motor_1_speed);
 			set_pwm(&motor_2, motor_2_speed);
 //			if (i % 10 == 0)
-				printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+			printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
+//				printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 			HAL_Delay(5);
 		}
 //		HAL_Delay(450);
@@ -388,7 +476,7 @@ ExploreState explore_update(ExploreState es) {
 	case MOVE_RIGHT:
 		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
 //		printf("Motor 2 EWMA: %.2f\n\r", motor_2.current_ewma_fast);
-		if (motor_2.current_ewma_fast > 0.29) {
+		if (motor_2.current_ewma_fast > motor_2_ewma_limit) {
 			motor_1_speed = 0;
 			motor_2_speed = 0;
 			es = START_LEFT;
@@ -447,6 +535,7 @@ int main(void)
   MX_ADC1_Init();
   MX_SPI3_Init();
   MX_USART2_UART_Init();
+  MX_TIM4_Init();
   /* USER CODE BEGIN 2 */
   // calibrate ADC for better accuracy
   HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
@@ -461,9 +550,9 @@ int main(void)
   HAL_TIM_Encoder_Start_IT(&htim2, TIM_CHANNEL_ALL);
   HAL_TIM_Encoder_Start_IT(&htim1, TIM_CHANNEL_ALL);
   // Initialize motors
-  motor_1.pos_ch = TIM_CHANNEL_1;
-  motor_1.neg_ch = TIM_CHANNEL_2;
-  motor_2.pos_ch = TIM_CHANNEL_3;
+  motor_1.pos_ch = TIM_CHANNEL_2;
+  motor_1.neg_ch = TIM_CHANNEL_3;
+  motor_2.pos_ch = TIM_CHANNEL_1;
   motor_2.neg_ch = TIM_CHANNEL_4;
   tune_motor_1();
   tune_motor_2();
@@ -479,6 +568,9 @@ int main(void)
   motor_2.current_ewma_fast = 0;
   // current sensing
   HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_vals, 2);
+  // PID timer
+//  HAL_TIM_Base_Start_IT(&htim4);
+//  HAL_TIM_IC_Start_IT(&htim4, TIM_CHANNEL_1);
   // PID stuff
   float set_point = 0.0f;
 //  printf("Enter a set point for the motor to go to in degrees \n\r");
@@ -490,11 +582,6 @@ int main(void)
 
   int delay = 5;
 
-  // Configure controller to be analog
-  uint8_t send[] = {0x01, 0x43, 0x44, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-  uint8_t recv[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-  spi_transaction(send, recv, 9);
-  ControllerState cs;
   ExploreState es = START_RIGHT;
   int explore_enabled = 0;
 
@@ -502,16 +589,26 @@ int main(void)
   HAL_NVIC_SetPriority(USART2_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(USART2_IRQn);
   HAL_UART_Receive_IT(&huart2, UARTBuffer, sizeof(UARTBuffer));
+  
+  HAL_GPIO_WritePin(GPIOG, GPIO_PIN_0, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOG, GPIO_PIN_1, GPIO_PIN_SET);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   printf("Hello world\n\r");
+//  motor_1.set_velocity = 60.0f;
   while (1)
   {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+  // returns 0 if controller is in digital mode (invalid)
+	if (!update_controller_state()) {
+		HAL_Delay(10);
+		continue;
+	}
+
 //	update_motor(&motor_2, set_point);
 //	update_motor(&motor_1, set_point);
 	if (explore_enabled) {
@@ -520,15 +617,8 @@ int main(void)
 		continue;
 	}
 
-	// returns 0 if controller is in digital mode (invalid)
-	if (!get_controller_state(&cs)) {
-		HAL_Delay(10);
-		continue;
-	}
 //	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
-	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.get_current(), motor_2.get_current());
-
-
+//	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.get_current(), motor_2.get_current());
 
 	float motor_1_speed = 0.f, motor_2_speed = 0.f;
 	if (!cs.circle && !cs.square) {
@@ -546,6 +636,9 @@ int main(void)
 
 //	printf("0: %02X, 1: %02X, 2: %02X, 3: %02X, 4: %02X, 5: %02X, 6: %02X, 7: %02X, 8: %02X,\n\r", recv[0] & 0xFF, recv[1] & 0xFF, recv[2] & 0xFF, recv[3] & 0xFF, recv[4] & 0xFF, recv[5] & 0xFF, recv[6] & 0xFF, recv[7] & 0xFF, recv[8] & 0xFF);
 //	printf("Motor 1 Speed: %.2f, Motor 2 Speed: %.2f\n\r", motor_1_speed, motor_2_speed);
+//	motor_1.set_velocity = motor_1_speed;
+//	motor_2.set_velocity = motor_2_speed;
+//	printf("Motor 1 set to: %.2f, Motor 2 set to: %.2f\n\r", motor_1.set_velocity, motor_2.set_velocity);
 	set_pwm(&motor_1, motor_1_speed);
 	set_pwm(&motor_2, motor_2_speed);
 
@@ -557,7 +650,7 @@ int main(void)
 	int16_t enc1 = motor_1.get_encoder_count();
 	int16_t enc2 = motor_2.get_encoder_count();
 	slip = enc1 + enc2;
-//	printf("Encoder counts: [%d, %d]\n\r", enc1, enc2);
+	printf("Encoder counts: [%d, %d]\n\r", enc1, enc2);
 //	printf("enc1:%d,enc2:%d,slip:%d\n\r", enc1, enc2, slip);
 
     HAL_Delay(delay);
@@ -1024,6 +1117,51 @@ static void MX_TIM3_Init(void)
 }
 
 /**
+  * @brief TIM4 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM4_Init(void)
+{
+
+  /* USER CODE BEGIN TIM4_Init 0 */
+
+  /* USER CODE END TIM4_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM4_Init 1 */
+
+  /* USER CODE END TIM4_Init 1 */
+  htim4.Instance = TIM4;
+  htim4.Init.Prescaler = 7;
+  htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim4.Init.Period = 65535;
+  htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim4, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim4, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM4_Init 2 */
+
+  /* USER CODE END TIM4_Init 2 */
+
+}
+
+/**
   * Enable DMA controller clock
   */
 static void MX_DMA_Init(void)
@@ -1161,14 +1299,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Alternate = GPIO_AF14_TIM15;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PD14 PD15 */
-  GPIO_InitStruct.Pin = GPIO_PIN_14|GPIO_PIN_15;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.Alternate = GPIO_AF2_TIM4;
-  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
-
   /*Configure GPIO pin : PC6 */
   GPIO_InitStruct.Pin = GPIO_PIN_6;
   GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
@@ -1223,14 +1353,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Alternate = GPIO_AF12_SDMMC1;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PB6 */
-  GPIO_InitStruct.Pin = GPIO_PIN_6;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.Alternate = GPIO_AF2_TIM4;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
   /*Configure GPIO pin : PB7 */
   GPIO_InitStruct.Pin = GPIO_PIN_7;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -1245,14 +1367,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
   GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : PE0 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.Alternate = GPIO_AF2_TIM4;
-  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
