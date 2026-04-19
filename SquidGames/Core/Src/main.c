@@ -298,7 +298,7 @@ int get_controller_state(ControllerState* state) {
 	uint8_t recv[9];
 	spi_transaction(send, recv, 9);
 	if (recv[1] != 0x73) { // Don't do anything if we are in digital mode
-		printf("Controller in digital mode!\n\r");
+//		printf("Controller in digital mode!\n\r");
 		return 0;
 	}
 	state->circle = !((recv[4] >> 5) & 1);
@@ -1273,8 +1273,8 @@ PUTCHAR_PROTOTYPE
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
     if (huart == &huart2) {
-    	memcpy(&roll, UARTBuffer, sizeof(float));
-		memcpy(&pitch, UARTBuffer + 4, sizeof(float));
+    	roll = *((float*)UARTBuffer);
+    	pitch = *((float*)(UARTBuffer + 4));
 
     	printf("roll: %.2f, pitch: %.2f\r\n", roll, pitch);
         HAL_UART_Receive_IT(&huart2, UARTBuffer, sizeof(UARTBuffer));
