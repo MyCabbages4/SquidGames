@@ -196,7 +196,7 @@ int main(void)
 
 	*buffer = roll;
 	*(buffer + 4) = pitch;
-	HAL_UART_Transmit(&huart1, buffer, sizeof(buffer), 10);
+	HAL_UART_Transmit(&huart1, buffer, sizeof(buffer), HAL_MAX_DELAY);
 //	printf("angle: %.2f\r\n", angle);
 
     /* USER CODE END WHILE */
