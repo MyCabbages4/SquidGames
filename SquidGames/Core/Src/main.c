@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "stdio.h"
+#include <math.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -34,6 +35,7 @@ typedef struct {
 	float prev_error;
 	float output;
 	float integral_max;
+	float integral_min;
 } PID;
 
 typedef struct {
@@ -45,7 +47,8 @@ typedef struct {
 	uint32_t neg_ch;
 	uint8_t id;
 	float velocity;
-	float set_duty_cycle;
+	float set_velocity;
+	int32_t delta;
 } Motor;
 
 /* USER CODE END PTD */
@@ -54,9 +57,10 @@ typedef struct {
 /* USER CODE BEGIN PD */
 #define PPR 16.0f
 #define GEAR_RATIO 16.0f // ~4*4 = ~16 encoder revolutions for a motor output revolution
-#define CPR (PPR * GEAR_RATIO * 4.0f)
+//#define CPR (PPR * GEAR_RATIO * 4.0f)
+#define CPR 1000 // TODO: not exact
 //#define DT
-#define DT 0.004369f
+#define DT 0.0065535f
 
 
 /* USER CODE END PD */
@@ -114,17 +118,22 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 	motor_2.encoder_count = motor_2_count;
 }
 
-float pid(Motor* m, float target, float set_point) {
-	float error = target - set_point;
+float pid(Motor* m, float measured, float set_point) {
+	float error = set_point - measured;
+	printf("Error:%.2f\n\r", error);
 
 	float P = m->vel_gains.kp * error;
 
 	m->vel_gains.integral += error * DT;
+	m->vel_gains.integral = fmin(m->vel_gains.integral, m->vel_gains.integral_max);
+	m->vel_gains.integral = fmax(m->vel_gains.integral, m->vel_gains.integral_min);
 	float I = m->vel_gains.ki * m->vel_gains.integral;
+//	printf("I:%.2f\n\r", I);)
 
 	float D = m->vel_gains.kd * (error - m->vel_gains.prev_error) / DT;
+	m->vel_gains.prev_error = error;
 
-	float output = P + I + D;
+	float output = P + I + D + 0.1f; // 0.1 is a feedforward term
 
 	if (output < -1) {
 		output = -1.0f;
@@ -153,6 +162,7 @@ float get_velocity(Motor* m) {
 	int32_t current = __HAL_TIM_GET_COUNTER(&htim1);
 	int32_t delta = current - m->last_count;
 	m->last_count = current;
+	m->delta = delta;
 
 	if (delta > 32767) delta -= 65536;
 	if (delta < -32768) delta += 65536;
@@ -165,9 +175,9 @@ float get_velocity(Motor* m) {
 
 void control(Motor* m) {
 	float vel = get_velocity(m);
-	m->velocity = vel;
-//	float duty_cycle = pid(m, m->set_duty_cycle, vel);
-//	set_pwm(m, duty_cycle);
+	 m->velocity = vel;
+	float duty_cycle = pid(m, vel, m->set_velocity);
+	set_pwm(m, duty_cycle);
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
@@ -175,13 +185,13 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     if (htim->Instance == TIM4)  // control loop timer at 1kHz
     {
         control(&motor_1);
-        control(&motor_2);
+//        control(&motor_2);
     }
 }
 
 
 void set_pwm(Motor* m, float duty_cycle_percent) {
-	m->set_duty_cycle = duty_cycle_percent;
+//	m->set_duty_cycle = duty_cycle_percent;
 	int duty_cycle = (int)(duty_cycle_percent * 200);
 //	int duty_cycle = (int)duty_cycle_percent;
 //	printf("Setting duty cycle to: %d\n\r", duty_cycle);
@@ -253,6 +263,14 @@ void update_motor_vel(Motor* m, float target_vel) {
 void tune_motor_1() {
 	  motor_1.pos_gains.kp = 0.0048f;
 	  motor_1.pos_gains.ki = 0.01f;
+
+	  // kp is 0.0009 and ki is 0.01
+	  motor_1.vel_gains.kp = 0.01f;
+	  motor_1.vel_gains.ki = 0.002f;
+	  motor_1.vel_gains.kd = 0.0f;
+
+	  motor_1.vel_gains.integral_max = 1.0f/motor_1.vel_gains.ki;
+	  motor_1.vel_gains.integral_min = -motor_1.vel_gains.integral_max;
 }
 void tune_motor_2() {
 	  motor_2.pos_gains.kp = 0.0041f;
@@ -328,12 +346,17 @@ int main(void)
 
   float delay = 700.0f;
   float kafjlafkj = 0.1f;
-  float add = 0.1f;
+//  float add = 0.1f;
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   printf("Hello world\n\r");
+//  motor_1.set_velocity = 60.0f;
+  motor_1.set_velocity = 0.0f;
+//  printf("SYSCLK: %lu Hz\n\r", HAL_RCC_GetSysClockFreq());
+//  printf("HCLK: %lu Hz\n\r", HAL_RCC_GetHCLKFreq());
+
   while (1)
   {
     /* USER CODE END WHILE */
@@ -344,7 +367,9 @@ int main(void)
 //	set_pwm(&motor_1, 0.2);
 
 //	set_pwm(&motor_1, kafjlafkj);
-	set_pwm(&motor_1, 0.25);
+//	set_pwm(&motor_1, 0.25f);
+//	printf("Motor_1_Vel:%.2f,Motor_1_Delta:%d\n\r", motor_1.velocity, motor_1.delta);
+
 //	printf("Dummy1:%d,Dummy2:%d,Motor_1_Vel:%.2f,Encoder:%d\n\r", -135, 135, motor_1.velocity, motor_1.encoder_count);
 //	kafjlafkj += add;
 //	if (kafjlafkj > 1) {
@@ -381,7 +406,13 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.MSIState = RCC_MSI_ON;
   RCC_OscInitStruct.MSICalibrationValue = 0;
   RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_6;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_MSI;
+  RCC_OscInitStruct.PLL.PLLM = 1;
+  RCC_OscInitStruct.PLL.PLLN = 40;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+  RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV2;
+  RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV2;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -391,12 +422,12 @@ void SystemClock_Config(void)
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_MSI;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_3) != HAL_OK)
   {
     Error_Handler();
   }
