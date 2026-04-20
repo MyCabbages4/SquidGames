@@ -23,6 +23,13 @@
 /* USER CODE BEGIN Includes */
 #include "stdio.h"
 #include "string.h"
+#include "ili9488.h"
+#include "xpt2046.h"
+
+#include "lvgl.h"
+#include "motor_ui.h"
+#include <math.h>
+#include "screen_main.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -75,6 +82,7 @@ typedef struct {
 #define DT 0.0065536f // Time between each encoder read
 #define MAX_ACCEL 20 // max acceleration
 
+#define LVGL_BUF_LINES  40  // number of rows in LVGL draw buffer
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -107,6 +115,23 @@ ControllerState last_state = {0.0f, 0.0f, 0, 0, 0, 0, 0, 0};
 volatile uint16_t adc_vals[2];
 int slip = 0;
 
+// LVGL display buffer
+static lv_disp_draw_buf_t draw_buf;
+static lv_color_t lvgl_buf1[ILI9488_WIDTH * LVGL_BUF_LINES];
+static lv_color_t lvgl_buf2[ILI9488_WIDTH * LVGL_BUF_LINES];
+
+// DMA transfer buffer — holds RGB666 converted pixels
+// Max size: 320 pixels * 10 rows * 3 bytes = 9,600 bytes
+static uint8_t dma_buf[ILI9488_WIDTH * LVGL_BUF_LINES * 3];
+
+// Store the display driver pointer so the DMA ISR can call lv_disp_flush_ready
+static lv_disp_drv_t *disp_drv_p = NULL;
+lv_disp_t * g_disp_p;
+volatile uint8_t dma_busy = 0;
+uint8_t is_display_dma_busy(void) {
+    return dma_busy;
+}
+static lv_indev_drv_t indev_drv;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -124,7 +149,8 @@ static void MX_USART2_UART_Init(void);
 static void MX_TIM4_Init(void);
 /* USER CODE BEGIN PFP */
 void update_ewma_limits(void);
-
+static void lvgl_display_init(void);
+static void my_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -503,6 +529,104 @@ ExploreState explore_update(ExploreState es) {
 uint8_t UARTBuffer[8];
 float roll = 0;
 float pitch = 0;
+// ---- LVGL Display Flush Callback (DMA version) ----
+// Converts RGB565 → RGB666 into a static buffer, then fires DMA.
+// Returns immediately — CPU is free while DMA streams to SPI.
+// lv_disp_flush_ready() is called from HAL_SPI_TxCpltCallback when done.
+static void my_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p) {
+    while (dma_busy);        // wait out the previous transfer
+    dma_busy = 1;
+
+    uint16_t w = area->x2 - area->x1 + 1;
+    uint16_t h = area->y2 - area->y1 + 1;
+    uint32_t total_pixels = w * h;
+//    printf("FLUSH: %dx%d at (%d,%d)\n\r", w, h, area->x1, area->y1);
+
+
+    // Save the driver pointer for the DMA completion callback
+    disp_drv_p = drv;
+
+    // Convert all pixels from RGB565 → RGB666 into the DMA buffer
+    uint8_t *dst = dma_buf;
+    for (uint32_t i = 0; i < total_pixels; i++) {
+        uint16_t c = color_p[i].full;
+        *dst++ = (c >> 8) & 0xF8;
+        *dst++ = (c >> 3) & 0xFC;
+        *dst++ = (c << 3) & 0xF8;
+    }
+
+    // Set the address window (blocking — only a few bytes, fast)
+    ILI9488_SetWindow(area->x1, area->y1, area->x2, area->y2);
+
+    // Set DC=data, CS=low, then fire DMA
+    LCD_DC_HIGH();
+    LCD_CS_LOW();
+//    HAL_SPI_Transmit_DMA(&hspi3, dma_buf, total_pixels * 3);
+
+    HAL_StatusTypeDef ret = HAL_SPI_Transmit_DMA(&hspi3, dma_buf, total_pixels * 3);
+    if (ret != HAL_OK) {
+//        printf("DMA FAIL: %d, total=%lu\n\r", ret, (unsigned long)(total_pixels * 3));
+        LCD_CS_HIGH();
+        dma_busy = 0;
+        lv_disp_flush_ready(drv);  // unblock LVGL even on failure
+    }
+    // DO NOT call lv_disp_flush_ready here!
+    // It will be called from HAL_SPI_TxCpltCallback when DMA finishes.
+}
+
+// ---- LVGL Display Driver Setup ----
+static void lvgl_display_init(void) {
+	lv_disp_draw_buf_init(&draw_buf, lvgl_buf1, lvgl_buf2, ILI9488_WIDTH * LVGL_BUF_LINES);
+
+    static lv_disp_drv_t disp_drv;
+    lv_disp_drv_init(&disp_drv);
+    disp_drv.hor_res  = ILI9488_WIDTH;    // 320
+    disp_drv.ver_res  = ILI9488_HEIGHT;   // 480
+
+    disp_drv.flush_cb = my_flush_cb;
+    disp_drv.draw_buf = &draw_buf;
+    g_disp_p = lv_disp_drv_register(&disp_drv);
+//    lv_disp_set_rotation(g_disp_p, LV_DISP_ROT_90);
+}
+
+// ---- DMA Transfer Complete Callback ----
+// Called by HAL from the DMA interrupt when SPI TX finishes.
+void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi) {
+    if (hspi->Instance == SPI3) {
+        /* DMA done ≠ SPI done. Wait for the shift register to drain
+         * before raising CS, otherwise the last byte gets truncated. */
+//        while (__HAL_SPI_GET_FLAG(hspi, SPI_FLAG_FTLVL) != SPI_FTLVL_EMPTY);
+//        while (__HAL_SPI_GET_FLAG(hspi, SPI_FLAG_BSY));
+
+        LCD_CS_HIGH();
+        dma_busy = 0;
+        if (disp_drv_p != NULL) lv_disp_flush_ready(disp_drv_p);
+    }
+}
+
+static void my_touchpad_read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
+    static int16_t last_x = 0, last_y = 0;
+    int16_t x, y;
+
+    if (XPT2046_Read(&x, &y)) {
+        last_x = x;
+        last_y = y;
+        data->state = LV_INDEV_STATE_PRESSED;
+    } else {
+        data->state = LV_INDEV_STATE_RELEASED;
+    }
+    /* LVGL expects the last known point reported on release as well. */
+    data->point.x = last_x;
+    data->point.y = last_y;
+}
+
+static void lvgl_touch_init(void) {
+    XPT2046_Init();
+    lv_indev_drv_init(&indev_drv);
+    indev_drv.type    = LV_INDEV_TYPE_POINTER;
+    indev_drv.read_cb = my_touchpad_read;
+    lv_indev_drv_register(&indev_drv);
+}
 /* USER CODE END 0 */
 
 /**
@@ -545,6 +669,22 @@ int main(void)
   MX_USART2_UART_Init();
   MX_TIM4_Init();
   /* USER CODE BEGIN 2 */
+  // Quick SPI3 sanity check - toggle CS and send a dummy byte
+//  LCD_CS_LOW();
+//  uint8_t dummy = 0xAA;
+//  HAL_StatusTypeDef ret = HAL_SPI_Transmit(&hspi3, &dummy, 1, 1000);
+//  LCD_CS_HIGH();
+//  printf("SPI3 transmit returned: %d\n\r", ret);  // 0=OK, 1=Error, 2=Busy, 3=Timeout
+
+  // Init the LCD hardware
+  ILI9488_Init(&hspi3);
+  // Init LVGL core
+  lv_init();
+  // Register the display driver
+  lvgl_display_init();
+  // setup touch
+  lvgl_touch_init();
+
   // calibrate ADC for better accuracy
   HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
 
@@ -614,6 +754,20 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   printf("Hello world\n\r");
 //  motor_1.set_velocity = 60.0f;
+  // 100f0d
+  lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x100f0d), LV_PART_MAIN);
+  lv_obj_t *splash_view = lv_img_create(lv_scr_act());
+  LV_IMG_DECLARE(splash);            // declare the converted image
+  lv_img_set_src(splash_view, &splash);
+  lv_obj_center(splash_view);
+
+  uint32_t t0 = HAL_GetTick();
+//  while (HAL_GetTick() - t0 < 2000) lv_timer_handler();  // show 2 sec
+  while (!XPT2046_IS_TOUCHED()) lv_timer_handler();
+
+  lv_obj_del(splash_view);
+  screen_main_init();
+
   while (1)
   {
     /* USER CODE END WHILE */
@@ -643,6 +797,34 @@ int main(void)
 		HAL_Delay(delay);
 		continue;
 	}
+
+	lv_timer_handler();
+//	  printf("Entering main loop\n\r");
+
+// display testing
+//	  uint16_t rx, ry;
+//	  if (XPT2046_ReadRaw(&rx, &ry)) {
+//		  char buf[48];
+//		  snprintf(buf, sizeof(buf), "raw: x=%u y=%u\r\n", rx, ry);
+//		  HAL_UART_Transmit(&hlpuart1, (uint8_t*)buf, strlen(buf), 100);
+//		  HAL_Delay(100);
+//	  }
+	static uint32_t last_print = 0;
+
+	int16_t sx, sy;
+	if (XPT2046_Read(&sx, &sy)) {
+		printf("screen x=%d y=%d \t delta t=%d\r\n", sx, sy, HAL_GetTick() - last_print);
+//		HAL_Delay(100);
+		last_print = HAL_GetTick();
+	}
+
+	static float sim_voltage = 0.0f;
+	sim_voltage += 0.1f;
+
+	motors_set_values(
+			0.5 * cos(sim_voltage) + 0.5, 12 * sin(sim_voltage),
+			0.5 * cos(sim_voltage) + 0.5, 12 * sin(sim_voltage)
+			);
 
 //	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 //	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.get_current(), motor_2.get_current());
@@ -675,6 +857,17 @@ int main(void)
 //	printf("Motor speed: [%f, %f]\n\r", motor_1_speed, motor_2_speed);
 //	printf("circle: %d, square: %d\n\r", circle, square);
 	printf("Current_L:%f,Current_R:%f,Lower:0,Upper:0.7,Thresh1:0.2,Thresh2:0.27\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+//  	static float sim_voltage = 0.0f;
+//	sim_voltage += 0.1f;
+
+//	motor_bar_set_value(&motorV1, 12 * motor_1_speed);
+//	motor_bar_set_value(&motorV2, 12 * motor_2_speed);
+//	motor_bar_set_value(&motorC1, adc_to_current(adc_vals[0]));
+//	motor_bar_set_value(&motorC2, adc_to_current(adc_vals[1]));
+	// motor_bar_set_voltage(&motor1, 12 * sin(sim_voltage));
+	// motor_bar_set_voltage(&motor2, 12 * cos(sim_voltage));
+
+//	printf("Current: [%f, %f]\n\r", adc_to_current(adc_vals[0]), adc_to_current(adc_vals[1]));
 
 	int16_t enc1 = motor_1.get_encoder_count();
 	int16_t enc2 = motor_2.get_encoder_count();
@@ -682,7 +875,6 @@ int main(void)
 //	printf("Encoder counts: [%d, %d]\n\r", enc1, enc2);
 //	printf("enc1:%d,enc2:%d,slip:%d\n\r", enc1, enc2, slip);
 
-    HAL_Delay(delay);
   }
   /* USER CODE END 3 */
 }
@@ -1244,6 +1436,7 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOF, LCD_CS_Pin|TOUCH_CS_Pin|LCD_DC_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin : PE2 */
   GPIO_InitStruct.Pin = GPIO_PIN_2;
@@ -1291,11 +1484,11 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PF13 PF15 */
-  GPIO_InitStruct.Pin = GPIO_PIN_13|GPIO_PIN_15;
+  /*Configure GPIO pins : LCD_CS_Pin TOUCH_CS_Pin LCD_DC_Pin */
+  GPIO_InitStruct.Pin = LCD_CS_Pin|TOUCH_CS_Pin|LCD_DC_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PG0 PG1 */
@@ -1374,13 +1567,11 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Alternate = GPIO_AF9_CAN1;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PD2 */
-  GPIO_InitStruct.Pin = GPIO_PIN_2;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-  GPIO_InitStruct.Alternate = GPIO_AF12_SDMMC1;
-  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+  /*Configure GPIO pin : TOUCH_IRQ_Pin */
+  GPIO_InitStruct.Pin = TOUCH_IRQ_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(TOUCH_IRQ_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PB7 */
   GPIO_InitStruct.Pin = GPIO_PIN_7;
