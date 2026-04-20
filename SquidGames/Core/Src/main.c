@@ -268,14 +268,14 @@ void control(Motor* m) {
 //	printf("velocity:%f,Dummy1:0,Dummy2:100\n\r", velocity, m->get_encoder_count());
 	m->target_velocity += min(max(m->set_velocity - m->target_velocity, -MAX_ACCEL), MAX_ACCEL);
 	float duty_cycle = pid(m, velocity, m->target_velocity);
-//	set_pwm(m, duty_cycle);
+	set_pwm(m, duty_cycle);
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance == TIM4)  // control loop timer at 1kHz
     {
-//        control(&motor_1);
+        control(&motor_1);
         control(&motor_2);
     }
 }
@@ -572,14 +572,6 @@ int main(void)
   motor_2.gains.ki = 0.0175f;
   motor_2.gains.kd = 0.000067f;
   motor_2.gains.feed_forward = 0.00145f;
-//  motor_1.gains.kp = 0.f;
-//  motor_1.gains.ki = 0.f;
-//  motor_1.gains.kd = 0.f;
-//  motor_1.gains.feed_forward = 0.f;
-//  motor_2.gains.kp = 0.f;
-//  motor_2.gains.ki = 0.f;
-//  motor_2.gains.kd = 0.f;
-//  motor_2.gains.feed_forward = 0.f;
   motor_1.id = 1;
   motor_2.id = 2;
   motor_1.get_encoder_count = get_tim1_val;
@@ -607,7 +599,7 @@ int main(void)
 
   ExploreState es = START_RIGHT;
   int explore_enabled = 0;
-  int gyro_control = 1;
+  int gyro_control = 0;
 
   // Communicate with Wrist Mount
   HAL_NVIC_SetPriority(USART2_IRQn, 0, 0);
@@ -627,14 +619,9 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-//	set_velocity(&motor_2, 100);
-	set_pwm(&motor_2, 0.2);
-	printf("current:%f\n\r", motor_2.current_ewma);
-	HAL_Delay(5);
-	continue;
 	float motor_1_speed = 0.f, motor_2_speed = 0.f;
 	if (gyro_control) {
-//		printf("Roll: %f, pitch: %f\n\r", -roll, pitch);
+		printf("Roll: %f, pitch: %f\n\r", -roll, pitch);
 		joystick_to_motor(-roll * SPEED_MUL, pitch * SPEED_MUL, &motor_1_speed, &motor_2_speed, LEFT_RIGHT);
 		set_pwm(&motor_1, motor_1_speed);
 		set_pwm(&motor_2, motor_2_speed);
@@ -661,7 +648,7 @@ int main(void)
 //	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.get_current(), motor_2.get_current());
 
 	if (!cs.circle && !cs.square) {
-		joystick_to_motor(cs.joy_1_y, cs.joy_2_y, &motor_1_speed, &motor_2_speed, ADVANCED);
+		joystick_to_motor(cs.joy_1_y, cs.joy_2_y, &motor_1_speed, &motor_2_speed, EXPERT);
 	} else if (cs.circle && !cs.square) { // move right
 		motor_2_speed = -0.3;
 		motor_1_speed = 0.27;
@@ -680,7 +667,9 @@ int main(void)
 //	printf("Motor 1 set to: %.2f, Motor 2 set to: %.2f\n\r", motor_1.set_velocity, motor_2.set_velocity);
 //	set_pwm(&motor_1, motor_1_speed);
 //	set_pwm(&motor_2, motor_2_speed);
-	set_pwm(&motor_1, 0.2);
+//	set_pwm(&motor_1, 0.2);
+	set_velocity(&motor_1, motor_1_speed * 300);
+	set_velocity(&motor_2, motor_2_speed * 300);
 
 //	printf("Current: [%f, %f]\n\r", adc_to_current(adc_vals[0]), adc_to_current(adc_vals[1]));
 //	printf("Motor speed: [%f, %f]\n\r", motor_1_speed, motor_2_speed);
@@ -1430,7 +1419,6 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
     	roll = *((float*)UARTBuffer);
     	pitch = *((float*)(UARTBuffer + 4));
 
-    	printf("roll: %.2f, pitch: %.2f\r\n", roll, pitch);
         HAL_UART_Receive_IT(&huart2, UARTBuffer, sizeof(UARTBuffer));
     }
 }
