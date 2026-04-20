@@ -1,0 +1,100 @@
+/*
+ * motor.h
+ *
+ *  Created on: Apr 19, 2026
+ *      Author: khush
+ */
+
+#ifndef SRC_MOTOR_H_
+#define SRC_MOTOR_H_
+
+#include "stm32l4xx_hal.h"
+#include "types.h"
+#include "utils.h"
+
+// unsafe way to set motor PWM (this can stall the motor)
+void set_pwm_unsafe(Motor* m, float duty_cycle_percent, TIM_HandleTypeDef* htim3) {
+	int duty_cycle = (int)(duty_cycle_percent * 200);
+//	printf("Setting duty cycle to: %.2f\n\r", duty_cycle);
+//	printf(",duty_cycle:%d", duty_cycle);
+//	printf(",pos_ch:%d,neg_ch:%d\n\r", m->pos_ch, m->neg_ch);
+	if (duty_cycle < 0) {
+		__HAL_TIM_SET_COMPARE(htim3, m->pos_ch, 0);
+		__HAL_TIM_SET_COMPARE(htim3, m->neg_ch, -duty_cycle);
+	} else {
+		__HAL_TIM_SET_COMPARE(htim3, m->pos_ch, duty_cycle);
+		__HAL_TIM_SET_COMPARE(htim3, m->neg_ch, 0);
+	}
+}
+
+// set PWM speed but also limit current
+void set_pwm(Motor* m, float duty_cycle_percent, TIM_HandleTypeDef* htim3) {
+//	printf("Duty Cycle Percent: %f\n\r", duty_cycle_percent);
+	// update ewma
+	float current_now = m->get_current();
+	m->current_ewma = (1-ALPHA) * m->current_ewma + ALPHA * current_now;
+	m->current_ewma_fast = (1-ALPHA2) * m->current_ewma_fast + ALPHA2 * current_now;
+	// this is essentially a P controller
+	float current_effort = (MAX_CURRENT - m->current_ewma);
+	if (current_effort < 0) current_effort = 0; // we want to avoid weirdness if current is over max value
+	else if (current_effort > 1) current_effort = 1;
+
+	float requested_magnitude = duty_cycle_percent < 0 ? -duty_cycle_percent : duty_cycle_percent;
+	int sign = duty_cycle_percent < 0 ? -1 : 1;
+
+	// choose the minimum of the 2 as your actual speed
+	// the effect of this is that when we approach the max current, 'current_effort' becomes small, so we slow down the motor
+	float min_magnitude = current_effort < requested_magnitude ? current_effort : requested_magnitude;
+	set_pwm_unsafe(m, sign * min_magnitude, htim3);
+}
+
+float pid(Motor* m, float measured, float set_point) {
+	float error = set_point - measured;
+//	 printf("Error:%.2f\n\r", error);
+
+	float P = m->gains.kp * error;
+
+	m->gains.integral += error * DT;
+	m->gains.integral = min(m->gains.integral, m->gains.integral_max);
+	m->gains.integral = max(m->gains.integral, m->gains.integral_min);
+	float I = m->gains.ki * m->gains.integral;
+
+	float D = m->gains.kd * (error - m->gains.prev_error) / DT;
+	m->gains.prev_error = error;
+
+	float output = P + I + D + m->gains.feed_forward; // 0.1 is a feedforward term
+
+	if (output < -1) {
+		output = -1.0f;
+	}
+
+	if (output < -0.05f && output > -0.1f) {
+		output = -0.1f;
+	}
+
+	if (output > 0.05f && output < 0.1f) {
+		output = 0.1f;
+	}
+
+	if (output > 1.0f) {
+		output = 1.0f;
+	}
+
+	return output;
+}
+
+float get_velocity(Motor* m, TIM_HandleTypeDef* htim1) {
+	int32_t count = __HAL_TIM_GET_COUNTER(htim1);
+	int32_t delta = count - m->prev_encoder_count;
+	m->prev_encoder_count = count;
+
+	if (delta > 32767) delta -= 65536;
+	if (delta < -32768) delta += 65536;
+//	printf("Delta:%d\n\r", delta);
+
+	float rpm = (((float)delta / CPR)) / DT * 60.f;
+
+	return rpm;
+}
+
+#endif /* SRC_MOTOR_H_ */
