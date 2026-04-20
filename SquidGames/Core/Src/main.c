@@ -105,6 +105,7 @@ TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
+TIM_HandleTypeDef htim5;
 
 /* USER CODE BEGIN PV */
 Motor motor_1;
@@ -114,6 +115,8 @@ ControllerState cs = {0.0f, 0.0f, 0, 0, 0, 0, 0, 0};
 ControllerState last_state = {0.0f, 0.0f, 0, 0, 0, 0, 0, 0};
 volatile uint16_t adc_vals[2];
 int slip = 0;
+int explore_enabled = 0;
+int gyro_control = 0;
 
 // LVGL display buffer
 static lv_disp_draw_buf_t draw_buf;
@@ -147,10 +150,12 @@ static void MX_ADC1_Init(void);
 static void MX_SPI3_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_TIM4_Init(void);
+static void MX_TIM5_Init(void);
 /* USER CODE BEGIN PFP */
 void update_ewma_limits(void);
 static void lvgl_display_init(void);
 static void my_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p);
+void input_handler();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -256,20 +261,6 @@ float pid(Motor* m, float measured, float set_point) {
 	return output;
 }
 
-void tune_motor_1() {
-	  motor_1.gains.kp = 0.0035f;
-	  motor_1.gains.ki = 0.0175f;
-	  motor_1.gains.kd = 0.000067f;
-	  motor_1.gains.feed_forward = 0.0013f;
-}
-
-void tune_motor_2() {
-	  motor_2.gains.kp = 0.0035f;
-	  motor_2.gains.ki = 0.0175f;
-	  motor_2.gains.kd = 0.000067f;
-	  motor_2.gains.feed_forward = 0.00145f;
-}
-
 float get_velocity(Motor* m) {
 	int32_t count = m->get_encoder_count();
 	int32_t delta = count - m->prev_encoder_count;
@@ -299,10 +290,12 @@ void control(Motor* m) {
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-    if (htim->Instance == TIM4)  // control loop timer at 1kHz
+    if (htim->Instance == TIM4 && !explore_enabled)  // control loop timer at 1kHz
     {
         control(&motor_1);
         control(&motor_2);
+    } else if (htim->Instance == TIM5) {
+    	input_handler();
     }
 }
 
@@ -420,6 +413,8 @@ typedef enum {
 	START_RIGHT,
 	MOVE_RIGHT
 } ExploreState;
+
+ExploreState es = START_RIGHT;
 
 float motor_1_ewma_limit = 0.29f;
 float motor_2_ewma_limit = 0.29f;
@@ -627,6 +622,70 @@ static void lvgl_touch_init(void) {
     indev_drv.read_cb = my_touchpad_read;
     lv_indev_drv_register(&indev_drv);
 }
+
+void input_handler() {
+	float motor_1_speed = 0.f, motor_2_speed = 0.f;
+	if (gyro_control) {
+		printf("Roll: %f, pitch: %f\n\r", -roll, pitch);
+		joystick_to_motor(-roll * SPEED_MUL, pitch * SPEED_MUL, &motor_1_speed, &motor_2_speed, LEFT_RIGHT);
+		set_pwm(&motor_1, motor_1_speed);
+		set_pwm(&motor_2, motor_2_speed);
+		return;
+	}
+  // returns 0 if controller is in digital mode (invalid)
+	if (!update_controller_state()) {
+		set_pwm(&motor_1, 0);
+		set_pwm(&motor_2, 0);
+		return;
+	}
+
+//	update_motor(&motor_2, set_point);
+//	update_motor(&motor_1, set_point);
+	if (explore_enabled) {
+		es = explore_update(es);
+		return;
+	}
+
+//	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+//	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.get_current(), motor_2.get_current());
+
+	if (!cs.circle && !cs.square) {
+		joystick_to_motor(cs.joy_1_y, cs.joy_2_y, &motor_1_speed, &motor_2_speed, EXPERT);
+	} else if (cs.circle && !cs.square) { // move right
+		motor_2_speed = -0.3;
+		motor_1_speed = 0.27;
+	} else if (cs.square && !cs.circle) { // move left
+		motor_1_speed = -0.3;
+		motor_2_speed = 0.27;
+	} else {
+		motor_1_speed = 0;
+		motor_2_speed = 0;
+	}
+
+//	printf("0: %02X, 1: %02X, 2: %02X, 3: %02X, 4: %02X, 5: %02X, 6: %02X, 7: %02X, 8: %02X,\n\r", recv[0] & 0xFF, recv[1] & 0xFF, recv[2] & 0xFF, recv[3] & 0xFF, recv[4] & 0xFF, recv[5] & 0xFF, recv[6] & 0xFF, recv[7] & 0xFF, recv[8] & 0xFF);
+//	printf("Motor 1 Speed: %.2f, Motor 2 Speed: %.2f\n\r", motor_1_speed, motor_2_speed);
+//	motor_1.set_velocity = motor_1_speed;
+//	motor_2.set_velocity = motor_2_speed;
+//	printf("Motor 1 set to: %.2f, Motor 2 set to: %.2f\n\r", motor_1.set_velocity, motor_2.set_velocity);
+//	set_pwm(&motor_1, motor_1_speed);
+//	set_pwm(&motor_2, motor_2_speed);
+//	set_pwm(&motor_1, 0.2);
+	set_velocity(&motor_1, motor_1_speed * 300);
+	set_velocity(&motor_2, motor_2_speed * 300);
+
+//	printf("Current: [%f, %f]\n\r", adc_to_current(adc_vals[0]), adc_to_current(adc_vals[1]));
+//	printf("Motor speed: [%f, %f]\n\r", motor_1_speed, motor_2_speed);
+//	printf("circle: %d, square: %d\n\r", circle, square);
+//	printf("Current_L:%f,Current_R:%f,Lower:0,Upper:0.7,Thresh1:0.2,Thresh2:0.27\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+//	printf("Current: [%f, %f]\n\r", adc_to_current(adc_vals[0]), adc_to_current(adc_vals[1]));
+
+	int16_t enc1 = motor_1.get_encoder_count();
+	int16_t enc2 = motor_2.get_encoder_count();
+	slip = enc1 + enc2;
+//	printf("Encoder counts: [%d, %d]\n\r", enc1, enc2);
+//	printf("enc1:%d,enc2:%d,slip:%d\n\r", enc1, enc2, slip);
+
+}
 /* USER CODE END 0 */
 
 /**
@@ -668,6 +727,7 @@ int main(void)
   MX_SPI3_Init();
   MX_USART2_UART_Init();
   MX_TIM4_Init();
+  MX_TIM5_Init();
   /* USER CODE BEGIN 2 */
   // Quick SPI3 sanity check - toggle CS and send a dummy byte
 //  LCD_CS_LOW();
@@ -726,20 +786,12 @@ int main(void)
   HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_vals, 2);
   // PID timer
   HAL_TIM_Base_Start_IT(&htim4);
+  // input handling
+  HAL_TIM_Base_Start_IT(&htim5);
   // PID stuff
-  float set_point = 0.0f;
-//  printf("Enter a set point for the motor to go to in degrees \n\r");
-//  scanf("%f", set_point);
-  set_point = 90.f;
 //  float counter_target = (set_point / 360.0f) * CPR;
 //  printf("Motor will go to %.2f degrees, which correlates to %.2f rotations\n\r", set_point, counter_target)
   // Tuning parameters:
-
-  int delay = 5;
-
-  ExploreState es = START_RIGHT;
-  int explore_enabled = 0;
-  int gyro_control = 0;
 
   // Communicate with Wrist Mount
   HAL_NVIC_SetPriority(USART2_IRQn, 0, 0);
@@ -773,33 +825,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	float motor_1_speed = 0.f, motor_2_speed = 0.f;
-	if (gyro_control) {
-		printf("Roll: %f, pitch: %f\n\r", -roll, pitch);
-		joystick_to_motor(-roll * SPEED_MUL, pitch * SPEED_MUL, &motor_1_speed, &motor_2_speed, LEFT_RIGHT);
-		set_pwm(&motor_1, motor_1_speed);
-		set_pwm(&motor_2, motor_2_speed);
-		HAL_Delay(delay);
-		continue;
-	}
-  // returns 0 if controller is in digital mode (invalid)
-	if (!update_controller_state()) {
-		set_pwm(&motor_1, 0);
-		set_pwm(&motor_2, 0);
-		HAL_Delay(10);
-		continue;
-	}
-
-//	update_motor(&motor_2, set_point);
-//	update_motor(&motor_1, set_point);
-	if (explore_enabled) {
-		es = explore_update(es);
-		HAL_Delay(delay);
-		continue;
-	}
-
 	lv_timer_handler();
-//	  printf("Entering main loop\n\r");
 
 // display testing
 //	  uint16_t rx, ry;
@@ -826,37 +852,7 @@ int main(void)
 			0.5 * cos(sim_voltage) + 0.5, 12 * sin(sim_voltage)
 			);
 
-//	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
-//	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.get_current(), motor_2.get_current());
 
-	if (!cs.circle && !cs.square) {
-		joystick_to_motor(cs.joy_1_y, cs.joy_2_y, &motor_1_speed, &motor_2_speed, EXPERT);
-	} else if (cs.circle && !cs.square) { // move right
-		motor_2_speed = -0.3;
-		motor_1_speed = 0.27;
-	} else if (cs.square && !cs.circle) { // move left
-		motor_1_speed = -0.3;
-		motor_2_speed = 0.27;
-	} else {
-		motor_1_speed = 0;
-		motor_2_speed = 0;
-	}
-
-//	printf("0: %02X, 1: %02X, 2: %02X, 3: %02X, 4: %02X, 5: %02X, 6: %02X, 7: %02X, 8: %02X,\n\r", recv[0] & 0xFF, recv[1] & 0xFF, recv[2] & 0xFF, recv[3] & 0xFF, recv[4] & 0xFF, recv[5] & 0xFF, recv[6] & 0xFF, recv[7] & 0xFF, recv[8] & 0xFF);
-//	printf("Motor 1 Speed: %.2f, Motor 2 Speed: %.2f\n\r", motor_1_speed, motor_2_speed);
-//	motor_1.set_velocity = motor_1_speed;
-//	motor_2.set_velocity = motor_2_speed;
-//	printf("Motor 1 set to: %.2f, Motor 2 set to: %.2f\n\r", motor_1.set_velocity, motor_2.set_velocity);
-//	set_pwm(&motor_1, motor_1_speed);
-//	set_pwm(&motor_2, motor_2_speed);
-//	set_pwm(&motor_1, 0.2);
-	set_velocity(&motor_1, motor_1_speed * 300);
-	set_velocity(&motor_2, motor_2_speed * 300);
-
-//	printf("Current: [%f, %f]\n\r", adc_to_current(adc_vals[0]), adc_to_current(adc_vals[1]));
-//	printf("Motor speed: [%f, %f]\n\r", motor_1_speed, motor_2_speed);
-//	printf("circle: %d, square: %d\n\r", circle, square);
-	printf("Current_L:%f,Current_R:%f,Lower:0,Upper:0.7,Thresh1:0.2,Thresh2:0.27\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 //  	static float sim_voltage = 0.0f;
 //	sim_voltage += 0.1f;
 
@@ -867,14 +863,7 @@ int main(void)
 	// motor_bar_set_voltage(&motor1, 12 * sin(sim_voltage));
 	// motor_bar_set_voltage(&motor2, 12 * cos(sim_voltage));
 
-//	printf("Current: [%f, %f]\n\r", adc_to_current(adc_vals[0]), adc_to_current(adc_vals[1]));
-
-	int16_t enc1 = motor_1.get_encoder_count();
-	int16_t enc2 = motor_2.get_encoder_count();
-	slip = enc1 + enc2;
-//	printf("Encoder counts: [%d, %d]\n\r", enc1, enc2);
-//	printf("enc1:%d,enc2:%d,slip:%d\n\r", enc1, enc2, slip);
-
+	HAL_Delay(5);
   }
   /* USER CODE END 3 */
 }
@@ -1383,6 +1372,51 @@ static void MX_TIM4_Init(void)
 }
 
 /**
+  * @brief TIM5 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM5_Init(void)
+{
+
+  /* USER CODE BEGIN TIM5_Init 0 */
+
+  /* USER CODE END TIM5_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM5_Init 1 */
+
+  /* USER CODE END TIM5_Init 1 */
+  htim5.Instance = TIM5;
+  htim5.Init.Prescaler = 79;
+  htim5.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim5.Init.Period = 9999;
+  htim5.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim5.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim5) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim5, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim5, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM5_Init 2 */
+
+  /* USER CODE END TIM5_Init 2 */
+
+}
+
+/**
   * Enable DMA controller clock
   */
 static void MX_DMA_Init(void)
@@ -1426,7 +1460,7 @@ static void MX_GPIO_Init(void)
   HAL_PWREx_EnableVddIO2();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13|GPIO_PIN_15, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOF, GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOG, GPIO_PIN_0|GPIO_PIN_1, GPIO_PIN_RESET);
@@ -1436,7 +1470,6 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(GPIOF, LCD_CS_Pin|TOUCH_CS_Pin|LCD_DC_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin : PE2 */
   GPIO_InitStruct.Pin = GPIO_PIN_2;
@@ -1484,11 +1517,11 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : LCD_CS_Pin TOUCH_CS_Pin LCD_DC_Pin */
-  GPIO_InitStruct.Pin = LCD_CS_Pin|TOUCH_CS_Pin|LCD_DC_Pin;
+  /*Configure GPIO pins : PF13 PF14 PF15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PG0 PG1 */
@@ -1567,11 +1600,13 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Alternate = GPIO_AF9_CAN1;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : TOUCH_IRQ_Pin */
-  GPIO_InitStruct.Pin = TOUCH_IRQ_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(TOUCH_IRQ_GPIO_Port, &GPIO_InitStruct);
+  /*Configure GPIO pin : PD2 */
+  GPIO_InitStruct.Pin = GPIO_PIN_2;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  GPIO_InitStruct.Alternate = GPIO_AF12_SDMMC1;
+  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PB7 */
   GPIO_InitStruct.Pin = GPIO_PIN_7;

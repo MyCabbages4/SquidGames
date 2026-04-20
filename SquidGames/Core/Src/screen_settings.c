@@ -40,6 +40,7 @@ static void event_cb(lv_event_t * e)
 
 void settings_build(lv_obj_t *parent, void* ctx) {
 	// default settings
+	printf("settings_build()\n\r");
 
 	// current limit slider
     current_slider = lv_slider_create(parent);
@@ -72,6 +73,8 @@ void settings_build(lv_obj_t *parent, void* ctx) {
 	ui_theme_apply_label(settings_label);
 
 	lv_obj_align(settings_label, LV_ALIGN_TOP_MID, 0, 0);
+	printf("settings_build()\n\r");
+
 }
 void settings_enter(void) {
 //	printf("entering screen_placeholder %d\n\r", id);

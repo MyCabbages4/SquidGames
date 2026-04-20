@@ -59,6 +59,8 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+
+/* USER CODE BEGIN Private defines */
 #define LCD_CS_Pin GPIO_PIN_13
 #define LCD_CS_GPIO_Port GPIOF
 #define TOUCH_CS_Pin GPIO_PIN_14
@@ -67,9 +69,6 @@ void Error_Handler(void);
 #define LCD_DC_GPIO_Port GPIOF
 #define TOUCH_IRQ_Pin GPIO_PIN_2
 #define TOUCH_IRQ_GPIO_Port GPIOD
-
-/* USER CODE BEGIN Private defines */
-
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus
