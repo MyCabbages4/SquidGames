@@ -170,8 +170,8 @@ void joystick_to_motor(float input1, float input2, float* motor_1_speed, float* 
 
 ExploreState explore_update(ExploreState es) {
 	float motor_1_speed = 0.0f, motor_2_speed = 0.0f;
-	printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
-//	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+//	printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
+	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 	switch (es) {
 	case START_LEFT:
 		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
@@ -183,15 +183,15 @@ ExploreState explore_update(ExploreState es) {
 //			printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 			HAL_Delay(5);
 		}
-		motor_1_speed = -0.2;
-		motor_2_speed = 0.18;
+		motor_1_speed = -0.3;
+		motor_2_speed = 0.27;
 		es = MOVE_LEFT;
 		for (int i = 0; i < 90; ++i) {
 			set_pwm(&motor_1, motor_1_speed, &htim3);
 			set_pwm(&motor_2, motor_2_speed, &htim3);
 //			if (i % 10 == 0)
-			printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
-//				printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+//			printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
+				printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 			HAL_Delay(5);
 		}
 //		HAL_Delay(450);
@@ -205,8 +205,8 @@ ExploreState explore_update(ExploreState es) {
 			motor_2_speed = 0;
 			es = START_RIGHT;
 		} else {
-			motor_1_speed = -0.2;
-			motor_2_speed = 0.18;
+			motor_1_speed = -0.3;
+			motor_2_speed = 0.27;
 		}
 		break;
 
@@ -220,15 +220,15 @@ ExploreState explore_update(ExploreState es) {
 //			printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 			HAL_Delay(5);
 		}
-		motor_2_speed = -0.2;
-		motor_1_speed = 0.18;
+		motor_2_speed = -0.3;
+		motor_1_speed = 0.27;
 		es = MOVE_RIGHT;
 		for (int i = 0; i < 90; ++i) {
 			set_pwm(&motor_1, motor_1_speed, &htim3);
 			set_pwm(&motor_2, motor_2_speed, &htim3);
 //			if (i % 10 == 0)
-			printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
-//				printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+//			printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
+				printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 			HAL_Delay(5);
 		}
 //		HAL_Delay(450);
@@ -242,8 +242,8 @@ ExploreState explore_update(ExploreState es) {
 			motor_2_speed = 0;
 			es = START_LEFT;
 		} else {
-			motor_2_speed = -0.2;
-			motor_1_speed = 0.18;
+			motor_2_speed = -0.3;
+			motor_1_speed = 0.27;
 		}
 		break;
 	}
@@ -374,13 +374,13 @@ int main(void)
 
 	float motor_1_speed = 0.f, motor_2_speed = 0.f;
 	if (!cs.circle && !cs.square) {
-		joystick_to_motor(cs.joy_1_y, cs.joy_2_y, &motor_1_speed, &motor_2_speed, ADVANCED);
+		joystick_to_motor(cs.joy_1_y, cs.joy_2_y, &motor_1_speed, &motor_2_speed, LEFT_RIGHT);
 	} else if (cs.circle && !cs.square) { // move right
-		motor_2_speed = -0.2;
-		motor_1_speed = 0.18;
+		motor_2_speed = -0.3;
+		motor_1_speed = 0.27;
 	} else if (cs.square && !cs.circle) { // move left
-		motor_1_speed = -0.2;
-		motor_2_speed = 0.18;
+		motor_1_speed = -0.3;
+		motor_2_speed = 0.27;
 	} else {
 		motor_1_speed = 0;
 		motor_2_speed = 0;
@@ -397,12 +397,12 @@ int main(void)
 //	printf("Current: [%f, %f]\n\r", adc_to_current(adc_vals[0]), adc_to_current(adc_vals[1]));
 //	printf("Motor speed: [%f, %f]\n\r", motor_1_speed, motor_2_speed);
 //	printf("circle: %d, square: %d\n\r", circle, square);
-//	printf("Current_L:%f,Current_R:%f,Lower:0,Upper:0.7,Thresh1:0.2,Thresh2:0.27\n\r", motor_1.current_ewma, motor_2.current_ewma);
+	printf("Current_L:%f,Current_R:%f,Lower:0,Upper:0.7,Thresh1:0.2,Thresh2:0.27\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 
 	int16_t enc1 = motor_1.get_encoder_count();
 	int16_t enc2 = motor_2.get_encoder_count();
 	slip = enc1 + enc2;
-	printf("Encoder counts: [%d, %d]\n\r", enc1, enc2);
+//	printf("Encoder counts: [%d, %d]\n\r", enc1, enc2);
 //	printf("enc1:%d,enc2:%d,slip:%d\n\r", enc1, enc2, slip);
 
     HAL_Delay(delay);
