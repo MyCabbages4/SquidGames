@@ -23,7 +23,6 @@
 /* USER CODE BEGIN Includes */
 #include "stdio.h"
 #include "string.h"
-#include <math.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -35,8 +34,6 @@ typedef struct {
 	float integral;
 	float prev_error;
 	float output;
-	float integral_max;
-	float integral_min;
 	float feed_forward;
 } PID;
 
@@ -51,6 +48,8 @@ typedef struct {
 	float current_ewma_fast;
 	int16_t prev_encoder_count;
 	float set_velocity;
+	float velocity_ewma;
+	float target_velocity;
 } Motor;
 
 typedef struct {
@@ -71,8 +70,10 @@ typedef struct {
 #define MAX_SLIP 2500
 #define ALPHA 0.1 // for current EWMA
 #define ALPHA2 0.5 // another, more responsive EWMA for detecting contact
+#define ALPHA_VEL 0.3 // EWMA for velocity filtering
 #define SPEED_MUL 0.35
-#define DT 0.0065536f	 // Time between each encoder read
+#define DT 0.0065536f // Time between each encoder read
+#define MAX_ACCEL 20 // max acceleration
 
 /* USER CODE END PD */
 
@@ -103,7 +104,7 @@ Motor motor_2;
 
 ControllerState cs = {0.0f, 0.0f, 0, 0, 0, 0, 0, 0};
 ControllerState last_state = {0.0f, 0.0f, 0, 0, 0, 0, 0, 0};
-uint16_t adc_vals[2];
+volatile uint16_t adc_vals[2];
 int slip = 0;
 
 /* USER CODE END PV */
@@ -202,49 +203,49 @@ float pid(Motor* m, float measured, float set_point) {
 	float P = m->gains.kp * error;
 
 	m->gains.integral += error * DT;
-	m->gains.integral = fmin(m->gains.integral, m->gains.integral_max);
-	m->gains.integral = fmax(m->gains.integral, m->gains.integral_min);
 	float I = m->gains.ki * m->gains.integral;
 
 	float D = m->gains.kd * (error - m->gains.prev_error) / DT;
 	m->gains.prev_error = error;
 
-	float output = P + I + D + m->gains.feed_forward; // 0.1 is a feedforward term
+	float output = P + I + D + m->gains.feed_forward * set_point;
 
 	if (output < -1) {
 		output = -1.0f;
 	}
 
-	if (output < -0.05f && output > -0.1f) {
-		output = -0.1f;
-	}
-
-	if (output > 0.05f && output < 0.1f) {
-		output = 0.1f;
+	if (output < -0.6) {
+		m->gains.integral -= error * DT; // conditional integration
 	}
 
 	if (output > 1.0f) {
 		output = 1.0f;
 	}
 
+	if (output > 0.6) {
+		m->gains.integral -= error * DT; // conditional integration
+	}
+//	printf("Set_point:%f,measured:%f,dummy1:0,dummy2:100,output:%f\n\r", set_point, measured, output * 100);
+
 	return output;
 }
 
 void tune_motor_1() {
-	  motor_1.gains.kp = 0.01f;
-	  motor_1.gains.ki = 0.002f;
-//	  motor_1.gains.integral_max = 1.0f/motor_1.gains.ki;
-//	  motor_1.gains.integral_min = -1.0f/motor_1.gains.ki;
-//	  motor_1.gains.feed_forward = 0.1f;
+	  motor_1.gains.kp = 0.0035f;
+	  motor_1.gains.ki = 0.0175f;
+	  motor_1.gains.kd = 0.000067f;
+	  motor_1.gains.feed_forward = 0.0013f;
 }
 
 void tune_motor_2() {
-	  motor_2.gains.kp = 0.0041f;
-	  motor_2.gains.ki = 0.0f;
+	  motor_2.gains.kp = 0.0035f;
+	  motor_2.gains.ki = 0.0175f;
+	  motor_2.gains.kd = 0.000067f;
+	  motor_2.gains.feed_forward = 0.00145f;
 }
 
 float get_velocity(Motor* m) {
-	int32_t count = __HAL_TIM_GET_COUNTER(&htim1);
+	int32_t count = m->get_encoder_count();
 	int32_t delta = count - m->prev_encoder_count;
 	m->prev_encoder_count = count;
 
@@ -253,14 +254,21 @@ float get_velocity(Motor* m) {
 //	printf("Delta:%d\n\r", delta);
 
 	float rpm = (((float)delta / CPR)) / DT * 60.f;
+	m->velocity_ewma = (1 - ALPHA_VEL) * m->velocity_ewma + ALPHA_VEL * rpm;
+	return m->velocity_ewma;
+}
 
-	return rpm;
+void set_velocity(Motor* m, float rpm) {
+	m->set_velocity = rpm;
 }
 
 void control(Motor* m) {
 	float velocity = get_velocity(m);
-	float duty_cycle = pid(m, velocity, m->set_velocity);
-	set_pwm(m, duty_cycle);
+//	printf("velocity:%f,encoder:%d\n\r", velocity, m->get_encoder_count());
+//	printf("velocity:%f,Dummy1:0,Dummy2:100\n\r", velocity, m->get_encoder_count());
+	m->target_velocity += min(max(m->set_velocity - m->target_velocity, -MAX_ACCEL), MAX_ACCEL);
+	float duty_cycle = pid(m, velocity, m->target_velocity);
+//	set_pwm(m, duty_cycle);
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
@@ -268,7 +276,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     if (htim->Instance == TIM4)  // control loop timer at 1kHz
     {
 //        control(&motor_1);
-        // control(&motor_2);
+        control(&motor_2);
     }
 }
 
@@ -554,8 +562,24 @@ int main(void)
   motor_1.neg_ch = TIM_CHANNEL_3;
   motor_2.pos_ch = TIM_CHANNEL_4;
   motor_2.neg_ch = TIM_CHANNEL_1;
-  tune_motor_1();
-  tune_motor_2();
+//  tune_motor_1();
+//  tune_motor_2();
+  motor_1.gains.kp = 0.0035f;
+  motor_1.gains.ki = 0.0175f;
+  motor_1.gains.kd = 0.000067f;
+  motor_1.gains.feed_forward = 0.0013f;
+  motor_2.gains.kp = 0.0035f;
+  motor_2.gains.ki = 0.0175f;
+  motor_2.gains.kd = 0.000067f;
+  motor_2.gains.feed_forward = 0.00145f;
+//  motor_1.gains.kp = 0.f;
+//  motor_1.gains.ki = 0.f;
+//  motor_1.gains.kd = 0.f;
+//  motor_1.gains.feed_forward = 0.f;
+//  motor_2.gains.kp = 0.f;
+//  motor_2.gains.ki = 0.f;
+//  motor_2.gains.kd = 0.f;
+//  motor_2.gains.feed_forward = 0.f;
   motor_1.id = 1;
   motor_2.id = 2;
   motor_1.get_encoder_count = get_tim1_val;
@@ -569,8 +593,7 @@ int main(void)
   // current sensing
   HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_vals, 2);
   // PID timer
-//  HAL_TIM_Base_Start_IT(&htim4);
-//  HAL_TIM_IC_Start_IT(&htim4, TIM_CHANNEL_1);
+  HAL_TIM_Base_Start_IT(&htim4);
   // PID stuff
   float set_point = 0.0f;
 //  printf("Enter a set point for the motor to go to in degrees \n\r");
@@ -604,6 +627,11 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+//	set_velocity(&motor_2, 100);
+	set_pwm(&motor_2, 0.2);
+	printf("current:%f\n\r", motor_2.current_ewma);
+	HAL_Delay(5);
+	continue;
 	float motor_1_speed = 0.f, motor_2_speed = 0.f;
 	if (gyro_control) {
 //		printf("Roll: %f, pitch: %f\n\r", -roll, pitch);
@@ -650,8 +678,9 @@ int main(void)
 //	motor_1.set_velocity = motor_1_speed;
 //	motor_2.set_velocity = motor_2_speed;
 //	printf("Motor 1 set to: %.2f, Motor 2 set to: %.2f\n\r", motor_1.set_velocity, motor_2.set_velocity);
-	set_pwm(&motor_1, motor_1_speed);
-	set_pwm(&motor_2, motor_2_speed);
+//	set_pwm(&motor_1, motor_1_speed);
+//	set_pwm(&motor_2, motor_2_speed);
+	set_pwm(&motor_1, 0.2);
 
 //	printf("Current: [%f, %f]\n\r", adc_to_current(adc_vals[0]), adc_to_current(adc_vals[1]));
 //	printf("Motor speed: [%f, %f]\n\r", motor_1_speed, motor_2_speed);
@@ -1042,7 +1071,7 @@ static void MX_TIM2_Init(void)
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
-  sConfig.IC1Polarity = TIM_ICPOLARITY_FALLING;
+  sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
   sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
   sConfig.IC1Filter = 0;
