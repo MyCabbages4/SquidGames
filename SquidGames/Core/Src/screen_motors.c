@@ -1,6 +1,11 @@
 #include "screen_motors.h"
 
-// Module-scope widget pointers. NULL when screen isn't active.
+
+static float current_left = 0;
+static float voltage_left = 0;
+static float current_right = 0;
+static float voltage_right = 0;
+
 static motor_bar_t bar_voltage_left;
 static motor_bar_t bar_current_left;
 static motor_bar_t bar_voltage_right;
@@ -8,8 +13,13 @@ static motor_bar_t bar_current_right;
 
 static bool bars_active = false;
 
-void motors_set_values(float current_left, float voltage_left, float current_right, float voltage_right) {
-    if (!bars_active) return;
+void motors_set_values(float cl, float vl, float cr, float vr) {
+	current_left = cl;
+	voltage_left = vl;
+	current_right = cr;
+	voltage_right = vr;
+
+	if (!bars_active) return;
 
     motor_bar_set_value(&bar_voltage_left,  voltage_left);
     motor_bar_set_value(&bar_current_left,  current_left);
@@ -47,14 +57,14 @@ void motors_build(lv_obj_t *parent, void* ctx) {
 	printf("entering motor screen\n\r");
 
 	motor_bar_create_leftalign(&bar_current_left, parent, "ML Current", 0, 0, 200, 60, 0, 1);
-	motor_bar_set_value(&bar_current_left, 0.7f);
+	motor_bar_set_value(&bar_current_left, current_left);
 	motor_bar_create_leftalign(&bar_voltage_left, parent, "ML Voltage", 0, 50, 180, 40, -12, 12);
-	motor_bar_set_value(&bar_voltage_left, 10);
+	motor_bar_set_value(&bar_voltage_left, voltage_left);
 
 	motor_bar_create_rightalign(&bar_current_right, parent, "MR Current", 0, 0, 200, 60, 0, 1);
-	motor_bar_set_value(&bar_current_right, 0.7f);
+	motor_bar_set_value(&bar_current_right, current_right);
 	motor_bar_create_rightalign(&bar_voltage_right, parent, "MR Voltage", 0, 50, 180, 40, -12, 12);
-	motor_bar_set_value(&bar_voltage_right, 10);
+	motor_bar_set_value(&bar_voltage_right, voltage_right);
 
 }
 

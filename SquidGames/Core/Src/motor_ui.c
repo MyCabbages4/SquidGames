@@ -1,4 +1,5 @@
 #include "motor_ui.h"
+#include "ui_theme.h"
 
 static const float RESOLUTION_MULT = 10000;
 
@@ -21,20 +22,15 @@ void motor_bar_create(motor_bar_t *mb, lv_obj_t *parent,
     lv_obj_set_style_pad_all(mb->container, 0, LV_PART_MAIN);
     lv_obj_clear_flag(mb->container, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Motor name label (top left)
+    // Motor name label
     mb->name_label = lv_label_create(mb->container);
     lv_label_set_text(mb->name_label, name);
-    lv_obj_set_style_text_color(mb->name_label, lv_color_hex(0xCCCCCC), LV_PART_MAIN);
-//    lv_obj_set_style_text_font(mb->name_label, &lv_font_montserrat_14, LV_PART_MAIN);
-//    lv_obj_align(mb->name_label, LV_ALIGN_TOP_LEFT, 0, 0);
+    ui_theme_apply_label_dim(mb->name_label);
 
-    // Voltage value label (top right)
+    // Voltage value label
     mb->value_label = lv_label_create(mb->container);
     lv_label_set_text(mb->value_label, "0.00");
-//	lv_label_set_text_fmt(mb->value_label, "VALUE %d.%d", 0, frac2);
-    lv_obj_set_style_text_color(mb->value_label, lv_color_hex(0xCCCCCC), LV_PART_MAIN);
-//    lv_obj_set_style_text_font(mb->value_label, &lv_font_montserrat_14, LV_PART_MAIN);
-//    lv_obj_align(mb->value_label, LV_ALIGN_TOP_RIGHT, 0, 0);
+    ui_theme_apply_label(mb->value_label);
 
     // The bar itself
     mb->bar = lv_bar_create(mb->container);
@@ -45,17 +41,7 @@ void motor_bar_create(motor_bar_t *mb, lv_obj_t *parent,
                      (int32_t)(mb->val_max * RESOLUTION_MULT));
     lv_bar_set_value(mb->bar, 0, LV_ANIM_OFF);
 
-    // Bar background (unfilled) — dark grey track
-    lv_obj_set_style_bg_color(mb->bar, lv_color_hex(0x1A1A2E), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(mb->bar, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_radius(mb->bar, 5, LV_PART_MAIN);
-
-    // Bar indicator (filled) — gradient green to red
-    lv_obj_set_style_bg_color(mb->bar, lv_color_hex(0x00CC66), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_grad_color(mb->bar, lv_color_hex(0xFF3333), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_grad_dir(mb->bar, LV_GRAD_DIR_HOR, LV_PART_INDICATOR);
-    lv_obj_set_style_bg_opa(mb->bar, LV_OPA_COVER, LV_PART_INDICATOR);
-    lv_obj_set_style_radius(mb->bar, 5, LV_PART_INDICATOR);
+    ui_theme_apply_bar(mb->bar);
 }
 
 //void motor_bar_create_leftalign(motor_bar_t *mb, lv_obj_t *parent,

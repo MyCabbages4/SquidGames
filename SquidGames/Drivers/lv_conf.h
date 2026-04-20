@@ -121,7 +121,7 @@
 #define LV_FONT_DEJAVU_16_PERSIAN_HEBREW 0
 #define LV_FONT_SIMSUN_16_CJK   0
 #define LV_FONT_UNSCII_8        0
-#define LV_FONT_UNSCII_16       0
+#define LV_FONT_UNSCII_16       1
 
 /* Default font */
 #define LV_FONT_DEFAULT         &lv_font_montserrat_14
