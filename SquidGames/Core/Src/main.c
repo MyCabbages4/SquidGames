@@ -30,59 +30,19 @@
 #include "motor_ui.h"
 #include <math.h>
 #include "screen_main.h"
+#include "types.h"
+#include "controller.h"
+#include "motor.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef struct {
-	float kp;
-	float ki;
-	float kd;
-	float integral;
-	float prev_error;
-	float output;
-	float feed_forward;
-} PID;
-
-typedef struct {
-	PID gains;
-	int16_t (*get_encoder_count)();
-	float (*get_current)();
-	uint32_t pos_ch;
-	uint32_t neg_ch;
-	uint8_t id;
-	float current_ewma;
-	float current_ewma_fast;
-	int16_t prev_encoder_count;
-	float set_velocity;
-	float velocity_ewma;
-	float target_velocity;
-} Motor;
-
-typedef struct {
-	float joy_1_y, joy_2_y;
-	uint8_t square, circle;
-	uint8_t dpad_up, dpad_down;
-	uint8_t dpad_left, dpad_right;
-} ControllerState;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define PPR 20.0f
-#define GEAR_RATIO 16.0f // ~4*4 = ~16 encoder revolutions for a motor output revolution
-#define CPR 1000
-#define MAX_CURRENT 1.0f // max current for each motor (Amps)
-#define MAX_SLIP 2500
-#define ALPHA 0.1 // for current EWMA
-#define ALPHA2 0.5 // another, more responsive EWMA for detecting contact
-#define ALPHA_VEL 0.3 // EWMA for velocity filtering
-#define SPEED_MUL 0.35
-#define DT 0.0065536f // Time between each encoder read
-#define MAX_ACCEL 20 // max acceleration
 
-#define LVGL_BUF_LINES  40  // number of rows in LVGL draw buffer
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -111,12 +71,16 @@ TIM_HandleTypeDef htim5;
 Motor motor_1;
 Motor motor_2;
 
+float motor_1_ewma_limit = 0.29f;
+float motor_2_ewma_limit = 0.29f;
+
 ControllerState cs = {0.0f, 0.0f, 0, 0, 0, 0, 0, 0};
 ControllerState last_state = {0.0f, 0.0f, 0, 0, 0, 0, 0, 0};
 volatile uint16_t adc_vals[2];
 int slip = 0;
 int explore_enabled = 0;
 int gyro_control = 0;
+ExploreState es = START_RIGHT;
 
 // LVGL display buffer
 static lv_disp_draw_buf_t draw_buf;
@@ -152,140 +116,21 @@ static void MX_USART2_UART_Init(void);
 static void MX_TIM4_Init(void);
 static void MX_TIM5_Init(void);
 /* USER CODE BEGIN PFP */
-void update_ewma_limits(void);
 static void lvgl_display_init(void);
 static void my_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p);
 void input_handler();
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-float min(float a, float b) {
-	return a < b ? a : b;
-}
-
-float max(float a, float b) {
-	return a > b ? a : b;
-}
-
-int16_t get_tim1_val() {
-	return __HAL_TIM_GET_COUNTER(&htim1);
-}
-
-int16_t get_tim2_val() {
-	return __HAL_TIM_GET_COUNTER(&htim2);
-}
-
-float adc_to_current(uint16_t adc_val) {
-	// resistance is 0.7 ohms
-	float voltage = (adc_val / 65535.0) * 3.3;
-	// V = IR --> I = V/R
-	return voltage / 0.7;
-}
-
-float get_current_1() {
-	return adc_to_current(adc_vals[0]);
-}
-
-float get_current_2() {
-	return adc_to_current(adc_vals[1]);
-}
-
-// unsafe way to set motor PWM (this can stall the motor)
-void set_pwm_unsafe(Motor* m, float duty_cycle_percent) {
-	int duty_cycle = (int)(duty_cycle_percent * 200);
-//	printf("Setting duty cycle to: %.2f\n\r", duty_cycle);
-//	printf(",duty_cycle:%d", duty_cycle);
-//	printf(",pos_ch:%d,neg_ch:%d\n\r", m->pos_ch, m->neg_ch);
-	if (duty_cycle < 0) {
-		__HAL_TIM_SET_COMPARE(&htim3, m->pos_ch, 0);
-		__HAL_TIM_SET_COMPARE(&htim3, m->neg_ch, -duty_cycle);
-	} else {
-		__HAL_TIM_SET_COMPARE(&htim3, m->pos_ch, duty_cycle);
-		__HAL_TIM_SET_COMPARE(&htim3, m->neg_ch, 0);
-	}
-}
-
-// set PWM speed but also limit current
-void set_pwm(Motor* m, float duty_cycle_percent) {
-//	printf("Duty Cycle Percent: %f\n\r", duty_cycle_percent);
-	// update ewma
-	float current_now = m->get_current();
-	m->current_ewma = (1-ALPHA) * m->current_ewma + ALPHA * current_now;
-	m->current_ewma_fast = (1-ALPHA2) * m->current_ewma_fast + ALPHA2 * current_now;
-	// this is essentially a P controller
-	float current_effort = (MAX_CURRENT - m->current_ewma);
-	if (current_effort < 0) current_effort = 0; // we want to avoid weirdness if current is over max value
-	else if (current_effort > 1) current_effort = 1;
-
-	float requested_magnitude = duty_cycle_percent < 0 ? -duty_cycle_percent : duty_cycle_percent;
-	int sign = duty_cycle_percent < 0 ? -1 : 1;
-
-	// choose the minimum of the 2 as your actual speed
-	// the effect of this is that when we approach the max current, 'current_effort' becomes small, so we slow down the motor
-	float min_magnitude = current_effort < requested_magnitude ? current_effort : requested_magnitude;
-	set_pwm_unsafe(m, sign * min_magnitude);
-}
-
-float pid(Motor* m, float measured, float set_point) {
-	float error = set_point - measured;
-//	 printf("Error:%.2f\n\r", error);
-
-	float P = m->gains.kp * error;
-
-	m->gains.integral += error * DT;
-	float I = m->gains.ki * m->gains.integral;
-
-	float D = m->gains.kd * (error - m->gains.prev_error) / DT;
-	m->gains.prev_error = error;
-
-	float output = P + I + D + m->gains.feed_forward * set_point;
-
-	if (output < -1) {
-		output = -1.0f;
-	}
-
-	if (output < -0.6) {
-		m->gains.integral -= error * DT; // conditional integration
-	}
-
-	if (output > 1.0f) {
-		output = 1.0f;
-	}
-
-	if (output > 0.6) {
-		m->gains.integral -= error * DT; // conditional integration
-	}
-//	printf("Set_point:%f,measured:%f,dummy1:0,dummy2:100,output:%f\n\r", set_point, measured, output * 100);
-
-	return output;
-}
-
-float get_velocity(Motor* m) {
-	int32_t count = m->get_encoder_count();
-	int32_t delta = count - m->prev_encoder_count;
-	m->prev_encoder_count = count;
-
-	if (delta > 32767) delta -= 65536;
-	if (delta < -32768) delta += 65536;
-//	printf("Delta:%d\n\r", delta);
-
-	float rpm = (((float)delta / CPR)) / DT * 60.f;
-	m->velocity_ewma = (1 - ALPHA_VEL) * m->velocity_ewma + ALPHA_VEL * rpm;
-	return m->velocity_ewma;
-}
-
-void set_velocity(Motor* m, float rpm) {
-	m->set_velocity = rpm;
-}
-
 void control(Motor* m) {
 	float velocity = get_velocity(m);
 //	printf("velocity:%f,encoder:%d\n\r", velocity, m->get_encoder_count());
 //	printf("velocity:%f,Dummy1:0,Dummy2:100\n\r", velocity, m->get_encoder_count());
 	m->target_velocity += min(max(m->set_velocity - m->target_velocity, -MAX_ACCEL), MAX_ACCEL);
 	float duty_cycle = pid(m, velocity, m->target_velocity);
-	set_pwm(m, duty_cycle);
+	set_pwm(m, duty_cycle, &htim3);
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
@@ -299,22 +144,14 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     }
 }
 
-void spi_transaction(uint8_t* send, uint8_t* recv, uint32_t n) {
-	HAL_GPIO_WritePin(GPIOE, GPIO_PIN_12, GPIO_PIN_RESET);
-	HAL_SPI_TransmitReceive(&hspi1, send, recv, n, 100);
-	HAL_GPIO_WritePin(GPIOE, GPIO_PIN_12, GPIO_PIN_SET);
-}
-
-typedef enum {
-	EXPERT, // no limits
-	ADVANCED, // same as expert, but with slip limit
-	PULL_ONLY, // you can only pull
-	LEFT_RIGHT, // one control for left/right, other for tensioning antagonistic motor
-	AUTO_SPOOL, // add an offset to make the motors automatically spool themselves in
-	SAFE, // limit unspooling to spooling speed of other motor, limits maneuverability somewhat
-} ControllerMode;
-
 void joystick_to_motor(float input1, float input2, float* motor_1_speed, float* motor_2_speed, ControllerMode mode) {
+	if (mode == PULL_ONLY) {
+		HAL_GPIO_WritePin(GPIOG, GPIO_PIN_0, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(GPIOG, GPIO_PIN_1, GPIO_PIN_RESET);
+	} else {
+		HAL_GPIO_WritePin(GPIOG, GPIO_PIN_0, GPIO_PIN_SET);
+		HAL_GPIO_WritePin(GPIOG, GPIO_PIN_1, GPIO_PIN_SET);
+	}
 	// motor 1 is on the left, motor 2 is on the right
 	// negative is pulling on the string, positive is releasing tension
 	switch (mode) {
@@ -366,75 +203,7 @@ void joystick_to_motor(float input1, float input2, float* motor_1_speed, float* 
 	}
 }
 
-int update_controller_state() {
-	uint8_t send[] = {0x01, 0x42, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-	uint8_t recv[9];
-	spi_transaction(send, recv, 9);
-	if (recv[1] != 0x73) { // Don't do anything if we are in digital mode
-		printf("Controller in digital mode!\n\r");
-		return 0;
-	}
 
-	last_state.joy_1_y = cs.joy_1_y;
-	last_state.joy_2_y = cs.joy_2_y;
-	last_state.square = cs.square;
-	last_state.circle = cs.circle;
-	last_state.dpad_up = cs.dpad_up;
-	last_state.dpad_down = cs.dpad_down;
-	last_state.dpad_left = cs.dpad_left;
-	last_state.dpad_right = cs.dpad_right;
-
-	cs.circle = !((recv[4] >> 5) & 1);
-	cs.square = !(recv[4] >> 7);
-	cs.dpad_left = !(recv[3] >> 7);
-	cs.dpad_right = !((recv[3] >> 5) & 1);
-	cs.dpad_up = !((recv[3] >> 4) & 1);
-	cs.dpad_down = !((recv[3] >> 6) & 1);
-
-	cs.joy_1_y = -(((float)recv[8] - 127.5f) / 127.5f) * SPEED_MUL;
-	cs.joy_2_y = -(((float)recv[6] - 127.5f) / 127.5f) * SPEED_MUL;
-
-	// deadzone
-	if (116 < recv[8] && recv[8] < 150) {
-		cs.joy_1_y = 0.0f;
-	}
-	if (117 < recv[6] && recv[6] < 127) {
-		cs.joy_2_y = 0.0f;
-	}
-
-	update_ewma_limits();
-
-	return 1;
-}
-
-typedef enum {
-	START_LEFT = 0,
-	MOVE_LEFT,
-	START_RIGHT,
-	MOVE_RIGHT
-} ExploreState;
-
-ExploreState es = START_RIGHT;
-
-float motor_1_ewma_limit = 0.29f;
-float motor_2_ewma_limit = 0.29f;
-
-void update_ewma_limits() {
-	// Update ewma limits: motor_1 = dpad_left/right; motor_2 = dpad_up/down
-	if (cs.dpad_right && !last_state.dpad_right) {
-		motor_1_ewma_limit += 0.01f;
-	} else if (cs.dpad_left && !last_state.dpad_left) {
-		if (motor_1_ewma_limit > 0.0f)
-			motor_1_ewma_limit -= 0.01f;
-	}
-
-	if (cs.dpad_up && !last_state.dpad_up) {
-		motor_2_ewma_limit += 0.01f;
-	} else if (cs.dpad_down && !last_state.dpad_down) {
-		if (motor_2_ewma_limit > 0.0f)
-			motor_2_ewma_limit -= 0.01f;
-	}
-}
 
 ExploreState explore_update(ExploreState es) {
 	float motor_1_speed = 0.0f, motor_2_speed = 0.0f;
@@ -445,18 +214,18 @@ ExploreState explore_update(ExploreState es) {
 		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
 		// stop motors
 		for (int i = 0; i < 20; ++i) {
-			set_pwm(&motor_1, 0);
-			set_pwm(&motor_2, 0);
-//			printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
-			printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+			set_pwm(&motor_1, 0, &htim3);
+			set_pwm(&motor_2, 0, &htim3);
+			printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
+//			printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 			HAL_Delay(5);
 		}
 		motor_1_speed = -0.3;
 		motor_2_speed = 0.27;
 		es = MOVE_LEFT;
 		for (int i = 0; i < 90; ++i) {
-			set_pwm(&motor_1, motor_1_speed);
-			set_pwm(&motor_2, motor_2_speed);
+			set_pwm(&motor_1, motor_1_speed, &htim3);
+			set_pwm(&motor_2, motor_2_speed, &htim3);
 //			if (i % 10 == 0)
 //			printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
 				printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
@@ -482,18 +251,18 @@ ExploreState explore_update(ExploreState es) {
 		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
 		// stop motors
 		for (int i = 0; i < 20; ++i) {
-			set_pwm(&motor_1, 0);
-			set_pwm(&motor_2, 0);
-//			printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
-			printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
+			set_pwm(&motor_1, 0, &htim3);
+			set_pwm(&motor_2, 0, &htim3);
+			printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
+//			printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 			HAL_Delay(5);
 		}
 		motor_2_speed = -0.3;
 		motor_1_speed = 0.27;
 		es = MOVE_RIGHT;
 		for (int i = 0; i < 90; ++i) {
-			set_pwm(&motor_1, motor_1_speed);
-			set_pwm(&motor_2, motor_2_speed);
+			set_pwm(&motor_1, motor_1_speed, &htim3);
+			set_pwm(&motor_2, motor_2_speed, &htim3);
 //			if (i % 10 == 0)
 //			printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
 				printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
@@ -515,8 +284,8 @@ ExploreState explore_update(ExploreState es) {
 		}
 		break;
 	}
-	set_pwm(&motor_1, motor_1_speed);
-	set_pwm(&motor_2, motor_2_speed);
+	set_pwm(&motor_1, motor_1_speed, &htim3);
+	set_pwm(&motor_2, motor_2_speed, &htim3);
 	return es;
 }
 
@@ -628,14 +397,14 @@ void input_handler() {
 	if (gyro_control) {
 		printf("Roll: %f, pitch: %f\n\r", -roll, pitch);
 		joystick_to_motor(-roll * SPEED_MUL, pitch * SPEED_MUL, &motor_1_speed, &motor_2_speed, LEFT_RIGHT);
-		set_pwm(&motor_1, motor_1_speed);
-		set_pwm(&motor_2, motor_2_speed);
+		set_pwm(&motor_1, motor_1_speed, &htim3);
+		set_pwm(&motor_2, motor_2_speed, &htim3);
 		return;
 	}
   // returns 0 if controller is in digital mode (invalid)
-	if (!update_controller_state()) {
-		set_pwm(&motor_1, 0);
-		set_pwm(&motor_2, 0);
+	if (!update_controller_state(&cs, &last_state, &hspi1)) {
+		set_pwm(&motor_1, 0, &htim3);
+		set_pwm(&motor_2, 0, &htim3);
 		return;
 	}
 
@@ -1521,7 +1290,7 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pin = GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PG0 PG1 */
@@ -1600,13 +1369,11 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Alternate = GPIO_AF9_CAN1;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PD2 */
-  GPIO_InitStruct.Pin = GPIO_PIN_2;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-  GPIO_InitStruct.Alternate = GPIO_AF12_SDMMC1;
-  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+  /*Configure GPIO pin : TOUCH_IRQ_Pin */
+  GPIO_InitStruct.Pin = TOUCH_IRQ_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(TOUCH_IRQ_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PB7 */
   GPIO_InitStruct.Pin = GPIO_PIN_7;
