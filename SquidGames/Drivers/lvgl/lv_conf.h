@@ -46,10 +46,10 @@
 
 /* Default display refresh period in ms.
  * LVGL will call the flush callback at most this often. */
-#define LV_DISP_DEF_REFR_PERIOD   30
+#define LV_DISP_DEF_REFR_PERIOD   16
 
 /* Input device read period in ms */
-#define LV_INDEV_DEF_READ_PERIOD   30
+#define LV_INDEV_DEF_READ_PERIOD   16
 
 /* Use a custom tick source?
  * 0 = we call lv_tick_inc() manually from SysTick (simplest approach) */
@@ -125,6 +125,7 @@
 
 /* Default font */
 #define LV_FONT_DEFAULT         &lv_font_montserrat_14
+//#define LV_FONT_DEFAULT         &lv_font_unscii_8
 
 /* Enable support for compressed fonts */
 #define LV_USE_FONT_COMPRESSED  0
@@ -151,7 +152,7 @@
 #define LV_USE_ARC        1
 #define LV_USE_BAR        1
 #define LV_USE_BTN        1
-#define LV_USE_BTNMATRIX  0
+#define LV_USE_BTNMATRIX  1
 #define LV_USE_CANVAS     0
 #define LV_USE_CHECKBOX   0
 #define LV_USE_DROPDOWN   0

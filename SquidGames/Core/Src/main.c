@@ -22,10 +22,13 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "ili9488.h"
+#include "xpt2046.h"
+
 #include "lvgl.h"
 #include <stdio.h>
 #include "motor_ui.h"
 #include <math.h>
+#include "screen_main.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -99,6 +102,11 @@ static uint8_t dma_buf[ILI9488_WIDTH * LVGL_BUF_LINES * 3];
 // Store the display driver pointer so the DMA ISR can call lv_disp_flush_ready
 static lv_disp_drv_t *disp_drv_p = NULL;
 lv_disp_t * g_disp_p;
+volatile uint8_t dma_busy = 0;
+uint8_t is_display_dma_busy(void) {
+    return dma_busy;
+}
+static lv_indev_drv_t indev_drv;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -204,6 +212,9 @@ float adc_to_current(uint32_t adc_val) {
 // Returns immediately — CPU is free while DMA streams to SPI.
 // lv_disp_flush_ready() is called from HAL_SPI_TxCpltCallback when done.
 static void my_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p) {
+    while (dma_busy);        // wait out the previous transfer
+    dma_busy = 1;
+
     uint16_t w = area->x2 - area->x1 + 1;
     uint16_t h = area->y2 - area->y1 + 1;
     uint32_t total_pixels = w * h;
@@ -234,6 +245,7 @@ static void my_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *c
     if (ret != HAL_OK) {
 //        printf("DMA FAIL: %d, total=%lu\n\r", ret, (unsigned long)(total_pixels * 3));
         LCD_CS_HIGH();
+        dma_busy = 0;
         lv_disp_flush_ready(drv);  // unblock LVGL even on failure
     }
     // DO NOT call lv_disp_flush_ready here!
@@ -259,13 +271,39 @@ static void lvgl_display_init(void) {
 // Called by HAL from the DMA interrupt when SPI TX finishes.
 void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi) {
     if (hspi->Instance == SPI3) {
-        LCD_CS_HIGH();  // deselect the display
-//        printf("DMA_DONE\n\r");
+        /* DMA done ≠ SPI done. Wait for the shift register to drain
+         * before raising CS, otherwise the last byte gets truncated. */
+//        while (__HAL_SPI_GET_FLAG(hspi, SPI_FLAG_FTLVL) != SPI_FTLVL_EMPTY);
+//        while (__HAL_SPI_GET_FLAG(hspi, SPI_FLAG_BSY));
 
-        if (disp_drv_p != NULL) {
-            lv_disp_flush_ready(disp_drv_p);  // tell LVGL: ready for next flush
-        }
+        LCD_CS_HIGH();
+        dma_busy = 0;
+        if (disp_drv_p != NULL) lv_disp_flush_ready(disp_drv_p);
     }
+}
+
+static void my_touchpad_read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
+    static int16_t last_x = 0, last_y = 0;
+    int16_t x, y;
+
+    if (XPT2046_Read(&x, &y)) {
+        last_x = x;
+        last_y = y;
+        data->state = LV_INDEV_STATE_PRESSED;
+    } else {
+        data->state = LV_INDEV_STATE_RELEASED;
+    }
+    /* LVGL expects the last known point reported on release as well. */
+    data->point.x = last_x;
+    data->point.y = last_y;
+}
+
+static void lvgl_touch_init(void) {
+    XPT2046_Init();
+    lv_indev_drv_init(&indev_drv);
+    indev_drv.type    = LV_INDEV_TYPE_POINTER;
+    indev_drv.read_cb = my_touchpad_read;
+    lv_indev_drv_register(&indev_drv);
 }
 /* USER CODE END 0 */
 
@@ -314,15 +352,15 @@ int main(void)
 //  LCD_CS_HIGH();
 //  printf("SPI3 transmit returned: %d\n\r", ret);  // 0=OK, 1=Error, 2=Busy, 3=Timeout
 
-  // 1. Init the LCD hardware
+  // Init the LCD hardware
   ILI9488_Init(&hspi3);
-//  ILI9488_FillScreen(ILI9488_RED);
-//  while(1);
-  // 2. Init LVGL core
+  // Init LVGL core
   lv_init();
-
-  // 3. Register the display driver
+  // Register the display driver
   lvgl_display_init();
+  // setup touch
+  lvgl_touch_init();
+
   // calibrate ADC for better accuracy
   HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
 
@@ -355,7 +393,7 @@ int main(void)
 //  printf("Motor will go to %.2f degrees, which correlates to %.2f rotations\n\r", set_point, counter_target)
   // Tuning parameters:
 
-  float delay = 10.0f;
+  float delay = 2.0f;
 
   // Configure controller to be analog
   float speed_mul = .25f;
@@ -367,31 +405,29 @@ int main(void)
 
 
   // Set a dark background
-	lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x0D1117), LV_PART_MAIN);
+//	lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0xFBFBFD), LV_PART_MAIN);
+//  screen_main_init();
+//  screen_select_btnmatrix();
 
-	// Title
-	lv_obj_t *title = lv_label_create(lv_scr_act());
-	lv_label_set_text(title, "Motor Status");
-	lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
-	lv_obj_set_style_text_font(title, &lv_font_montserrat_14, LV_PART_MAIN);
-	lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
 
-	// Create 2 motor bars, stacked vertically
-	motor_bar_t motorV1, motorV2, motorC1, motorC2;
-	motor_bar_create(&motorV1, lv_scr_act(), "M1 Voltage", 20, 40, -12, 12);
-	motor_bar_create(&motorV2, lv_scr_act(), "M2 Voltage", 20, 110, -12, 12);
-	motor_bar_create(&motorC1, lv_scr_act(), "M1 Current", 20, 180, 0, 1.25);
-	motor_bar_create(&motorC2, lv_scr_act(), "M2 Current", 20, 250, 0, 1.25);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  printf("Hello world\n\r");
-  printf("LVGL tick test:\n\r");
-  printf("  tick = %u\n\r", (unsigned)lv_tick_get());
-  HAL_Delay(100);
-  printf("  tick = %u\n\r", (unsigned)lv_tick_get());
-  printf("  LV_MEM_SIZE = %u\n\r", (unsigned)LV_MEM_SIZE);
+  // 100f0d
+  printf("starting main loop...\n\r");
+  lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x100f0d), LV_PART_MAIN);
+  lv_obj_t *splash_view = lv_img_create(lv_scr_act());
+  LV_IMG_DECLARE(splash);            // declare the converted image
+  lv_img_set_src(splash_view, &splash);
+  lv_obj_center(splash_view);
+
+  uint32_t t0 = HAL_GetTick();
+//  while (HAL_GetTick() - t0 < 2000) lv_timer_handler();  // show 2 sec
+  while (!XPT2046_IS_TOUCHED()) lv_timer_handler();
+
+  lv_obj_del(splash_view);
+  screen_main_init();
 
   while (1)
   {
@@ -400,6 +436,31 @@ int main(void)
     /* USER CODE BEGIN 3 */
 	  lv_timer_handler();
 //	  printf("Entering main loop\n\r");
+
+	  // display testing
+//	  uint16_t rx, ry;
+//	  if (XPT2046_ReadRaw(&rx, &ry)) {
+//		  char buf[48];
+//		  snprintf(buf, sizeof(buf), "raw: x=%u y=%u\r\n", rx, ry);
+//		  HAL_UART_Transmit(&hlpuart1, (uint8_t*)buf, strlen(buf), 100);
+//		  HAL_Delay(100);
+//	  }
+	  static uint32_t last_print = 0;
+
+	  int16_t sx, sy;
+	  if (XPT2046_Read(&sx, &sy)) {
+		  printf("screen x=%d y=%d \t delta t=%d\r\n", sx, sy, HAL_GetTick() - last_print);
+		  HAL_Delay(100);
+		  last_print = HAL_GetTick();
+	  }
+
+	  static float sim_voltage = 0.0f;
+	  sim_voltage += 0.1f;
+
+	  motors_set_values(
+			  0.5 * cos(sim_voltage) + 0.5, 12 * sin(sim_voltage),
+			  0.5 * cos(sim_voltage) + 0.5, 12 * sin(sim_voltage)
+	  );
 
 //	update_motor(&motor_2, set_point);
 //	update_motor(&motor_1, set_point);
@@ -422,22 +483,22 @@ int main(void)
 	motor_1_speed = motor_2_speed;
 	motor_2_speed = temp;
 
-	printf("0: %02X, 1: %02X, 2: %02X, 3: %02X, 4: %02X, 5: %02X, 6: %02X, 7: %02X, 8: %02X,\n\r", recv[0] & 0xFF, recv[1] & 0xFF, recv[2] & 0xFF, recv[3] & 0xFF, recv[4] & 0xFF, recv[5] & 0xFF, recv[6] & 0xFF, recv[7] & 0xFF, recv[8] & 0xFF);
+//	printf("0: %02X, 1: %02X, 2: %02X, 3: %02X, 4: %02X, 5: %02X, 6: %02X, 7: %02X, 8: %02X,\n\r", recv[0] & 0xFF, recv[1] & 0xFF, recv[2] & 0xFF, recv[3] & 0xFF, recv[4] & 0xFF, recv[5] & 0xFF, recv[6] & 0xFF, recv[7] & 0xFF, recv[8] & 0xFF);
 //	printf("Motor 1 Speed: %.2f, Motor 2 Speed: %.2f\n\r", motor_1_speed, motor_2_speed);
 	set_pwm(&motor_1, motor_1_speed);
 	set_pwm(&motor_2, motor_2_speed);
 
-  	static float sim_voltage = 0.0f;
-	sim_voltage += 0.1f;
+//  	static float sim_voltage = 0.0f;
+//	sim_voltage += 0.1f;
 
-	motor_bar_set_voltage(&motorV1, 12 * motor_1_speed);
-	motor_bar_set_voltage(&motorV2, 12 * motor_2_speed);
-	motor_bar_set_voltage(&motorC1, adc_to_current(adc_vals[0]));
-	motor_bar_set_voltage(&motorC2, adc_to_current(adc_vals[1]));
+//	motor_bar_set_value(&motorV1, 12 * motor_1_speed);
+//	motor_bar_set_value(&motorV2, 12 * motor_2_speed);
+//	motor_bar_set_value(&motorC1, adc_to_current(adc_vals[0]));
+//	motor_bar_set_value(&motorC2, adc_to_current(adc_vals[1]));
 	// motor_bar_set_voltage(&motor1, 12 * sin(sim_voltage));
 	// motor_bar_set_voltage(&motor2, 12 * cos(sim_voltage));
 
-	printf("Current: [%f, %f]\n\r", adc_to_current(adc_vals[0]), adc_to_current(adc_vals[1]));
+//	printf("Current: [%f, %f]\n\r", adc_to_current(adc_vals[0]), adc_to_current(adc_vals[1]));
 
     HAL_Delay((int)delay);
   }
@@ -901,7 +962,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOF, LCD_CS_Pin|LCD_DC_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOF, LCD_CS_Pin|TOUCH_CS_Pin|LCD_DC_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin : PE2 */
   GPIO_InitStruct.Pin = GPIO_PIN_2;
@@ -948,8 +1009,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : LCD_CS_Pin LCD_DC_Pin */
-  GPIO_InitStruct.Pin = LCD_CS_Pin|LCD_DC_Pin;
+  /*Configure GPIO pins : LCD_CS_Pin TOUCH_CS_Pin LCD_DC_Pin */
+  GPIO_InitStruct.Pin = LCD_CS_Pin|TOUCH_CS_Pin|LCD_DC_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
@@ -1033,13 +1094,11 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Alternate = GPIO_AF9_CAN1;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PD2 */
-  GPIO_InitStruct.Pin = GPIO_PIN_2;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-  GPIO_InitStruct.Alternate = GPIO_AF12_SDMMC1;
-  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+  /*Configure GPIO pin : TOUCH_IRQ_Pin */
+  GPIO_InitStruct.Pin = TOUCH_IRQ_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(TOUCH_IRQ_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PD3 PD4 PD5 PD6 */
   GPIO_InitStruct.Pin = GPIO_PIN_3|GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6;
