@@ -52,15 +52,18 @@ typedef enum {
 typedef enum {
 	START_LEFT = 0,
 	MOVE_LEFT,
+	STOP_LEFT,
 	START_RIGHT,
-	MOVE_RIGHT
+	MOVE_RIGHT,
+	STOP_RIGHT,
+	WAIT,
 } ExploreState;
 
 #define PPR 20.0f
 #define GEAR_RATIO 16.0f // ~4*4 = ~16 encoder revolutions for a motor output revolution
 #define CPR 1000
 #define MAX_CURRENT 1.0f // max current for each motor (Amps)
-#define MAX_SLIP 2500
+#define MAX_SLIP 3000
 #define ALPHA 0.1 // for current EWMA
 #define ALPHA2 0.5 // another, more responsive EWMA for detecting contact
 #define ALPHA_VEL 0.3 // EWMA for velocity filtering

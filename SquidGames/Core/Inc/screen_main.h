@@ -20,19 +20,19 @@ typedef struct {
     void (*exit)(void);
 } screen_def_t;
 
-typedef enum {SCR_MOTORS, SCR_PLACEHOLDER, SCR_SETTINGS, SCR_COUNT} screen_id_t;
+typedef enum {SCR_MOTORS, SCR_SETTINGS, SCR_COUNT} screen_id_t;
 //const int SCR_COUNT = 2;
 
 static const screen_def_t screens[SCR_COUNT] = {
     [SCR_MOTORS] = {motors_build, motors_enter, motors_exit},
-	[SCR_PLACEHOLDER] = {placeholder_build, placeholder_enter, placeholder_exit},
+//	[SCR_PLACEHOLDER] = {placeholder_build, placeholder_enter, placeholder_exit},
 	[SCR_SETTINGS] = {settings_build, settings_enter, settings_exit}
 };
 
-static const screen_id_t bmat_map[5] = {SCR_MOTORS, SCR_SETTINGS, SCR_PLACEHOLDER, SCR_PLACEHOLDER, SCR_PLACEHOLDER};
+static const screen_id_t bmat_map[5] = {SCR_MOTORS, SCR_SETTINGS};
 static const char* screen_labels[SCR_COUNT] = {
 		[SCR_MOTORS] = "motor telemetry",
-		[SCR_PLACEHOLDER] = "placeholder",
+//		[SCR_PLACEHOLDER] = "placeholder",
 		[SCR_SETTINGS] = "settings"
 };
 

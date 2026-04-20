@@ -86,7 +86,32 @@ void ui_theme_apply_slider(lv_obj_t *slider) {
 }
 
 void ui_theme_apply_btnmatrix(lv_obj_t *btnm) {
-    /* container */
+    /* Shared styles for state-filtered selectors — must be static */
+    static lv_style_t s_item_idle, s_item_pressed, s_item_checked;
+    static bool inited = false;
+    if (!inited) {
+        lv_style_init(&s_item_idle);
+        lv_style_set_bg_color(&s_item_idle, UI_COL_BG_PANEL);
+        lv_style_set_bg_opa(&s_item_idle, LV_OPA_COVER);
+        lv_style_set_border_color(&s_item_idle, UI_COL_AMBER_DIM);
+        lv_style_set_border_width(&s_item_idle, 1);
+        lv_style_set_border_side(&s_item_idle, LV_BORDER_SIDE_INTERNAL);
+        lv_style_set_radius(&s_item_idle, 0);
+        lv_style_set_text_color(&s_item_idle, UI_COL_TEXT);
+        lv_style_set_text_font(&s_item_idle, UI_FONT_BODY);
+
+        lv_style_init(&s_item_pressed);
+        lv_style_set_bg_color(&s_item_pressed, UI_COL_AMBER);
+        lv_style_set_text_color(&s_item_pressed, UI_COL_BG);
+
+        lv_style_init(&s_item_checked);
+        lv_style_set_bg_color(&s_item_checked, UI_COL_AMBER_DIM);
+        lv_style_set_text_color(&s_item_checked, UI_COL_TEXT_HI);
+
+        inited = true;
+    }
+
+    /* Container — can stay as local styles */
     lv_obj_set_style_bg_color(btnm, UI_COL_BG_PANEL, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(btnm, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_color(btnm, UI_COL_AMBER, LV_PART_MAIN);
@@ -95,21 +120,8 @@ void ui_theme_apply_btnmatrix(lv_obj_t *btnm) {
     lv_obj_set_style_pad_all(btnm, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_gap(btnm, 0, LV_PART_MAIN);
 
-    /* buttons — idle */
-    lv_obj_set_style_bg_color(btnm, UI_COL_BG_PANEL, LV_PART_ITEMS);
-    lv_obj_set_style_bg_opa(btnm, LV_OPA_COVER, LV_PART_ITEMS);
-    lv_obj_set_style_border_color(btnm, UI_COL_AMBER_DIM, LV_PART_ITEMS);
-    lv_obj_set_style_border_width(btnm, 1, LV_PART_ITEMS);
-    lv_obj_set_style_border_side(btnm, LV_BORDER_SIDE_INTERNAL, LV_PART_ITEMS);
-    lv_obj_set_style_radius(btnm, 0, LV_PART_ITEMS);
-    lv_obj_set_style_text_color(btnm, UI_COL_TEXT, LV_PART_ITEMS);
-    lv_obj_set_style_text_font(btnm, UI_FONT_BODY, LV_PART_ITEMS);
-
-    /* pressed */
-    lv_obj_set_style_bg_color(btnm, UI_COL_AMBER, LV_PART_ITEMS | LV_STATE_PRESSED);
-    lv_obj_set_style_text_color(btnm, UI_COL_BG, LV_PART_ITEMS | LV_STATE_PRESSED);
-
-    /* checked */
-    lv_obj_set_style_bg_color(btnm, UI_COL_AMBER_DIM, LV_PART_ITEMS | LV_STATE_CHECKED);
-    lv_obj_set_style_text_color(btnm, UI_COL_TEXT_HI, LV_PART_ITEMS | LV_STATE_CHECKED);
+    /* Items via shared styles — reliable for state-filtered selectors */
+    lv_obj_add_style(btnm, &s_item_idle, LV_PART_ITEMS);
+    lv_obj_add_style(btnm, &s_item_pressed, LV_PART_ITEMS | LV_STATE_PRESSED);
+    lv_obj_add_style(btnm, &s_item_checked, LV_PART_ITEMS | LV_STATE_CHECKED);
 }

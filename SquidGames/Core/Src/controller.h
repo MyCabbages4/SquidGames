@@ -42,8 +42,8 @@ int update_controller_state(ControllerState* cs, ControllerState* last_state, SP
 	cs->dpad_up = !((recv[3] >> 4) & 1);
 	cs->dpad_down = !((recv[3] >> 6) & 1);
 
-	cs->joy_1_y = -(((float)recv[8] - 127.5f) / 127.5f) * SPEED_MUL;
-	cs->joy_2_y = -(((float)recv[6] - 127.5f) / 127.5f) * SPEED_MUL;
+	cs->joy_1_y = -(((float)recv[8] - 127.5f) / 127.5f);
+	cs->joy_2_y = -(((float)recv[6] - 127.5f) / 127.5f);
 
 	// deadzone
 	if (116 < recv[8] && recv[8] < 150) {

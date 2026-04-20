@@ -68,8 +68,7 @@ void motor_bar_set_value(motor_bar_t *mb, float value) {
     if (value > mb->val_max) value = mb->val_max;
 
     lv_bar_set_value(mb->bar, (int32_t)(value * RESOLUTION_MULT), LV_ANIM_OFF);
-    int whole = (int)value;
-//	int frac1  = abs(((int)(value * 10)) % 10);
-	int frac2  = abs(((int)(value * 100)) % 100);
-	lv_label_set_text_fmt(mb->value_label, "%d.%d", whole, frac2);
+	char buf[10];
+	sprintf(buf, "%.3f", value);
+	lv_label_set_text(mb->value_label, buf);
 }

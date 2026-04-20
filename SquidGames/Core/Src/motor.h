@@ -12,6 +12,8 @@
 #include "types.h"
 #include "utils.h"
 
+extern float current_limit;
+
 // unsafe way to set motor PWM (this can stall the motor)
 void set_pwm_unsafe(Motor* m, float duty_cycle_percent, TIM_HandleTypeDef* htim3) {
 	int duty_cycle = (int)(duty_cycle_percent * 200);
@@ -27,15 +29,19 @@ void set_pwm_unsafe(Motor* m, float duty_cycle_percent, TIM_HandleTypeDef* htim3
 	}
 }
 
-// set PWM speed but also limit current
-void set_pwm(Motor* m, float duty_cycle_percent, TIM_HandleTypeDef* htim3) {
-//	printf("Duty Cycle Percent: %f\n\r", duty_cycle_percent);
+void update_ewma(Motor* m) {
 	// update ewma
 	float current_now = m->get_current();
 	m->current_ewma = (1-ALPHA) * m->current_ewma + ALPHA * current_now;
 	m->current_ewma_fast = (1-ALPHA2) * m->current_ewma_fast + ALPHA2 * current_now;
+}
+
+// set PWM speed but also limit current
+void set_pwm(Motor* m, float duty_cycle_percent, TIM_HandleTypeDef* htim3) {
+//	printf("Duty Cycle Percent: %f\n\r", duty_cycle_percent);
+	update_ewma(m);
 	// this is essentially a P controller
-	float current_effort = (MAX_CURRENT - m->current_ewma);
+	float current_effort = (current_limit - m->current_ewma);
 	if (current_effort < 0) current_effort = 0; // we want to avoid weirdness if current is over max value
 	else if (current_effort > 1) current_effort = 1;
 
@@ -78,7 +84,7 @@ float pid(Motor* m, float measured, float set_point) {
 		m->gains.integral -= error * DT; // conditional integration
 	}
 //	printf("Set_point:%f,measured:%f,dummy1:0,dummy2:100,output:%f\n\r", set_point, measured, output * 100);
-
+	if (set_point < 0.001 && set_point > -0.001) return 0; // don't try to hold position when at 0 velocity
 	return output;
 }
 

@@ -4,6 +4,7 @@
 static lv_obj_t* active_screen = NULL;	// currently active screen
 static lv_obj_t* select_bmat = NULL;	// screen select button matrix
 static lv_obj_t* screen_label = NULL;
+static bool first = true;
 
 void screen_main_init(void) {
 	lv_obj_t* root = lv_scr_act();
@@ -30,7 +31,8 @@ void screen_main_init(void) {
 }
 
 void swap_screen(screen_id_t id, void* ctx) {
-//	if(current == id) return;	// TODO unsure if this is needed or not
+	if(!first && current == id) return;	// TODO unsure if this is needed or not
+	first = false;
 	printf("swapping to %d\n\r", id);
 
 	screens[current].exit();
@@ -48,34 +50,34 @@ static void event_cb(lv_event_t * e)
 
     lv_obj_t * obj = lv_event_get_target(e);
     uint32_t id = lv_btnmatrix_get_selected_btn(obj);	// this is how i can access the thing
-    bool prev = id == 0 ? true : false;
-    bool next = id == 6 ? true : false;
-    if(prev || next) {
-        /*Find the checked button*/
-        uint32_t i;
-        for(i = 1; i < 7; i++) {
-            if(lv_btnmatrix_has_btn_ctrl(obj, i, LV_BTNMATRIX_CTRL_CHECKED)) break;
-        }
-
-        if(prev && i > 1) i--;
-        else if(next && i < 5) i++;
-
-        lv_btnmatrix_set_btn_ctrl(obj, i, LV_BTNMATRIX_CTRL_CHECKED);
-//        swap_screen(SCR_PLACEHOLDER, (void *)(intptr_t)i);
-    }
+//    bool prev = id == 0 ? true : false;
+//    bool next = id == 6 ? true : false;
+//    if(prev || next) {
+//        /*Find the checked button*/
+//        uint32_t i;
+//        for(i = 1; i < 7; i++) {
+//            if(lv_btnmatrix_has_btn_ctrl(obj, i, LV_BTNMATRIX_CTRL_CHECKED)) break;
+//        }
+//
+//        if(prev && i > 1) i--;
+//        else if(next && i < 5) i++;
+//
+//        lv_btnmatrix_set_btn_ctrl(obj, i, LV_BTNMATRIX_CTRL_CHECKED);
+////        swap_screen(SCR_PLACEHOLDER, (void *)(intptr_t)i);
+//    }
 //    } else {
 //    	swap_screen(SCR_PLACEHOLDER, (void *)(intptr_t)id);
 //    }
 
     id = lv_btnmatrix_get_selected_btn(obj);
-    swap_screen(bmat_map[id-1], (void *)(intptr_t)id);
+    swap_screen(bmat_map[id], (void *)(intptr_t)id);
 }
 
 /**
  * Make a button group (pagination)
  */
 lv_obj_t* screen_select_btnmatrix(void) {
-    static const char * map[] = {LV_SYMBOL_LEFT, "1", "2", "3", "4", "5", LV_SYMBOL_RIGHT, ""};
+    static const char * map[] = {"TELEMET", "OPTIONS", ""};
 
     lv_obj_t * btnm = lv_btnmatrix_create(lv_scr_act());
     lv_btnmatrix_set_map(btnm, map);
@@ -84,11 +86,10 @@ lv_obj_t* screen_select_btnmatrix(void) {
     lv_obj_set_size(btnm, 225, 35);
 
     lv_btnmatrix_set_btn_ctrl_all(btnm, LV_BTNMATRIX_CTRL_CHECKABLE);
-    lv_btnmatrix_clear_btn_ctrl(btnm, 0, LV_BTNMATRIX_CTRL_CHECKABLE);
-    lv_btnmatrix_clear_btn_ctrl(btnm, 6, LV_BTNMATRIX_CTRL_CHECKABLE);
+//    lv_btnmatrix_clear_btn_ctrl(btnm, 0, LV_BTNMATRIX_CTRL_CHECKABLE);
 
     lv_btnmatrix_set_one_checked(btnm, true);
-    lv_btnmatrix_set_btn_ctrl(btnm, 1, LV_BTNMATRIX_CTRL_CHECKED);
+    lv_btnmatrix_set_btn_ctrl(btnm, 0, LV_BTNMATRIX_CTRL_CHECKED);
 
     lv_obj_set_pos(btnm, ILI9488_WIDTH - 225, ILI9488_HEIGHT - 35);
     return btnm;
