@@ -357,6 +357,8 @@ int main(void)
     /* USER CODE BEGIN 3 */
   // returns 0 if controller is in digital mode (invalid)
 	if (!update_controller_state(&cs, &last_state, &hspi1)) {
+    set_pwm(&motor_1, 0, &htim3);
+		set_pwm(&motor_2, 0, &htim3);
 		HAL_Delay(10);
 		continue;
 	}
