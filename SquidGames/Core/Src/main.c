@@ -217,7 +217,6 @@ ExploreState explore_update(ExploreState es) {
 	float motor_1_speed = 0.0f, motor_2_speed = 0.0f;
 	update_ewma(&motor_1);
 	update_ewma(&motor_2);
-//	update_ewma_limits(&cs, &last_state, &motor_1_ewma_limit, &motor_2_ewma_limit);
 //	printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
 	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 	switch (es) {
@@ -538,8 +537,6 @@ int main(void)
   motor_1.neg_ch = TIM_CHANNEL_3;
   motor_2.pos_ch = TIM_CHANNEL_4;
   motor_2.neg_ch = TIM_CHANNEL_1;
-//  tune_motor_1();
-//  tune_motor_2();
   motor_1.gains.kp = 0.0035f;
   motor_1.gains.ki = 0.0175f;
   motor_1.gains.kd = 0.000067f;
@@ -564,16 +561,11 @@ int main(void)
   HAL_TIM_Base_Start_IT(&htim4);
   // input handling
   HAL_TIM_Base_Start_IT(&htim5);
-  // PID stuff
-//  float counter_target = (set_point / 360.0f) * CPR;
-//  printf("Motor will go to %.2f degrees, which correlates to %.2f rotations\n\r", set_point, counter_target)
-  // Tuning parameters:
-
   // Communicate with Wrist Mount
   HAL_NVIC_SetPriority(USART2_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(USART2_IRQn);
   HAL_UART_Receive_IT(&huart2, UARTBuffer, sizeof(UARTBuffer));
-  
+  // enable motors
   HAL_GPIO_WritePin(GPIOG, GPIO_PIN_0, GPIO_PIN_SET);
   HAL_GPIO_WritePin(GPIOG, GPIO_PIN_1, GPIO_PIN_SET);
   /* USER CODE END 2 */
@@ -581,8 +573,6 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   printf("Hello world\n\r");
-//  motor_1.set_velocity = 60.0f;
-  // 100f0d
   lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x100f0d), LV_PART_MAIN);
   lv_obj_t *splash_view = lv_img_create(lv_scr_act());
   LV_IMG_DECLARE(splash);            // declare the converted image
