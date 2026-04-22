@@ -71,8 +71,8 @@ TIM_HandleTypeDef htim5;
 Motor motor_1;
 Motor motor_2;
 
-float motor_1_ewma_limit = 0.29f;
-float motor_2_ewma_limit = 0.31f;
+float motor_1_ewma_limit = 0.35f;
+float motor_2_ewma_limit = 0.40f;
 
 ControllerState cs = {0.0f, 0.0f, 0, 0, 0, 0, 0, 0};
 ControllerState last_state = {0.0f, 0.0f, 0, 0, 0, 0, 0, 0};
@@ -83,6 +83,7 @@ int gyro_control = 0;
 ExploreState es = START_RIGHT;
 ControllerMode ps2_mode = ADVANCED;
 float current_limit;
+float speed_mul = 250;
 
 // LVGL display buffer
 static lv_disp_draw_buf_t draw_buf;
@@ -204,10 +205,10 @@ void joystick_to_motor(float input1, float input2, float* motor_1_speed, float* 
 			break;
 		case SAFE:
 			if (input1 > 0) {
-				input1 = min(input1, max(-input2 * 0.95, 0));
+				input1 = min(input1, max((-motor_2.velocity_ewma / speed_mul) * 0.95, 0));
 			}
 			if (input2 > 0) {
-				input2 = min(input2, max(-input1 * 0.95, 0));
+				input2 = min(input2, max((-motor_1.velocity_ewma / speed_mul) * 0.95, 0));
 			}
 			*motor_1_speed = input1;
 			*motor_2_speed = input2;
@@ -440,6 +441,7 @@ static void lvgl_touch_init(void) {
 void input_handler() {
 	settings_t s = settings_get();
 	current_limit = s.current_limit;
+	speed_mul = s.speed_mult;
 
 	float motor_1_speed = 0.f, motor_2_speed = 0.f;
 
