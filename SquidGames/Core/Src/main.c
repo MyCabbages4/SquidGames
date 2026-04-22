@@ -150,13 +150,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 }
 
 void joystick_to_motor(float input1, float input2, float* motor_1_speed, float* motor_2_speed, ControllerMode mode) {
-	// if (mode == PULL_ONLY) {
-	// 	HAL_GPIO_WritePin(GPIOG, GPIO_PIN_0, GPIO_PIN_RESET);
-	// 	HAL_GPIO_WritePin(GPIOG, GPIO_PIN_1, GPIO_PIN_RESET);
-	// } else {
-	// 	HAL_GPIO_WritePin(GPIOG, GPIO_PIN_0, GPIO_PIN_SET);
-	// 	HAL_GPIO_WritePin(GPIOG, GPIO_PIN_1, GPIO_PIN_SET);
-	// }
 	// motor 1 is on the left, motor 2 is on the right
 	// negative is pulling on the string, positive is releasing tension
 	switch (mode) {
@@ -230,30 +223,14 @@ ExploreState explore_update(ExploreState es) {
 	switch (es) {
 	case START_LEFT:
 		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
-//		// stop motors
-//		for (int i = 0; i < 20; ++i) {
-//			set_pwm(&motor_1, 0, &htim3);
-//			set_pwm(&motor_2, 0, &htim3);
-//			printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
-////			printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
-//			HAL_Delay(5);
-//		}
 		motor_1_speed = -0.3;
 		motor_2_speed = 0.27;
 		set_pwm(&motor_1, motor_1_speed, &htim3);
 		set_pwm(&motor_2, motor_2_speed, &htim3);
+		// wait for startup current transient to stop
 		wait_states = 40;
 		next_state = MOVE_LEFT;
 		es = WAIT;
-//		for (int i = 0; i < 90; ++i) {
-//			set_pwm(&motor_1, motor_1_speed, &htim3);
-//			set_pwm(&motor_2, motor_2_speed, &htim3);
-////			if (i % 10 == 0)
-////			printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
-//				printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
-//			HAL_Delay(5);
-//		}
-//		HAL_Delay(450);
 		break;
 	case MOVE_LEFT:
 //		printf("Motor 1 EWMA: %.2f\n\r", motor_1.current_ewma_fast);
@@ -268,6 +245,7 @@ ExploreState explore_update(ExploreState es) {
 		}
 		break;
 	case STOP_LEFT:
+		// make motors stop
 		motor_1_speed = 0;
 		motor_2_speed = 0;
 		wait_states = 20;
@@ -276,33 +254,15 @@ ExploreState explore_update(ExploreState es) {
 		break;
 	case START_RIGHT:
 		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
-		// stop motors
-//		for (int i = 0; i < 20; ++i) {
-//			set_pwm(&motor_1, 0, &htim3);
-//			set_pwm(&motor_2, 0, &htim3);
-//			printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
-//			printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
-//			HAL_Delay(5);
-//		}
 		motor_2_speed = -0.3;
 		motor_1_speed = 0.27;
 		set_pwm(&motor_1, motor_1_speed, &htim3);
 		set_pwm(&motor_2, motor_2_speed, &htim3);
 		wait_states = 40;
+		// wait for startup current transient to stop
 		next_state = MOVE_RIGHT;
 		es = WAIT;
-//		es = MOVE_RIGHT;
-//		for (int i = 0; i < 90; ++i) {
-//			set_pwm(&motor_1, motor_1_speed, &htim3);
-//			set_pwm(&motor_2, motor_2_speed, &htim3);
-////			if (i % 10 == 0)
-////			printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
-//				printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
-//			HAL_Delay(5);
-//		}
-//		HAL_Delay(450);
 		break;
-
 	case MOVE_RIGHT:
 		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
 //		printf("Motor 2 EWMA: %.2f\n\r", motor_2.current_ewma_fast);
@@ -316,6 +276,7 @@ ExploreState explore_update(ExploreState es) {
 		}
 		break;
 	case STOP_RIGHT:
+		// make motors stop
 		motor_1_speed = 0;
 		motor_2_speed = 0;
 		wait_states = 20;
