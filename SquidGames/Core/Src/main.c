@@ -209,8 +209,6 @@ void joystick_to_motor(float input1, float input2, float* motor_1_speed, float* 
 	}
 }
 
-
-
 ExploreState explore_update(ExploreState es) {
 	static int wait_states = 0;
 	static ExploreState next_state = WAIT;
@@ -363,11 +361,6 @@ static void lvgl_display_init(void) {
 // Called by HAL from the DMA interrupt when SPI TX finishes.
 void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi) {
     if (hspi->Instance == SPI3) {
-        /* DMA done ≠ SPI done. Wait for the shift register to drain
-         * before raising CS, otherwise the last byte gets truncated. */
-//        while (__HAL_SPI_GET_FLAG(hspi, SPI_FLAG_FTLVL) != SPI_FTLVL_EMPTY);
-//        while (__HAL_SPI_GET_FLAG(hspi, SPI_FLAG_BSY));
-
         LCD_CS_HIGH();
         dma_busy = 0;
         if (disp_drv_p != NULL) lv_disp_flush_ready(disp_drv_p);
@@ -504,12 +497,6 @@ int main(void)
   MX_TIM4_Init();
   MX_TIM5_Init();
   /* USER CODE BEGIN 2 */
-  // Quick SPI3 sanity check - toggle CS and send a dummy byte
-//  LCD_CS_LOW();
-//  uint8_t dummy = 0xAA;
-//  HAL_StatusTypeDef ret = HAL_SPI_Transmit(&hspi3, &dummy, 1, 1000);
-//  LCD_CS_HIGH();
-//  printf("SPI3 transmit returned: %d\n\r", ret);  // 0=OK, 1=Error, 2=Busy, 3=Timeout
 
   // Init the LCD hardware
   ILI9488_Init(&hspi3);
@@ -593,25 +580,13 @@ int main(void)
     /* USER CODE BEGIN 3 */
 	lv_timer_handler();
 
-// display testing
-//	  uint16_t rx, ry;
-//	  if (XPT2046_ReadRaw(&rx, &ry)) {
-//		  char buf[48];
-//		  snprintf(buf, sizeof(buf), "raw: x=%u y=%u\r\n", rx, ry);
-//		  HAL_UART_Transmit(&hlpuart1, (uint8_t*)buf, strlen(buf), 100);
-//		  HAL_Delay(100);
-//	  }
 	static uint32_t last_print = 0;
 
 	int16_t sx, sy;
 	if (XPT2046_Read(&sx, &sy)) {
 		printf("screen x=%d y=%d \t delta t=%d\r\n", sx, sy, HAL_GetTick() - last_print);
-//		HAL_Delay(100);
 		last_print = HAL_GetTick();
 	}
-
-//	static float sim_voltage = 0.0f;
-//	sim_voltage += 0.1f;
 
 	motors_set_values(
 			motor_1.current_ewma, motor_1.velocity_ewma,
@@ -619,16 +594,6 @@ int main(void)
 			);
 
 
-//  	static float sim_voltage = 0.0f;
-//	sim_voltage += 0.1f;
-
-//	motor_bar_set_value(&motorV1, 12 * motor_1_speed);
-//	motor_bar_set_value(&motorV2, 12 * motor_2_speed);
-//	motor_bar_set_value(&motorC1, adc_to_current(adc_vals[0]));
-//	motor_bar_set_value(&motorC2, adc_to_current(adc_vals[1]));
-	// motor_bar_set_voltage(&motor1, 12 * sin(sim_voltage));
-	// motor_bar_set_voltage(&motor2, 12 * cos(sim_voltage));
-//	printf("targets:[%f, %f], vel: [%f, %f]\n\r", motor_1.target_velocity, motor_2.target_velocity, motor_1.velocity_ewma, motor_2.velocity_ewma);
 	HAL_Delay(5);
   }
   /* USER CODE END 3 */

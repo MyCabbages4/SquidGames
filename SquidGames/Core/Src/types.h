@@ -19,18 +19,18 @@ typedef struct {
 } PID;
 
 typedef struct {
-	PID gains;
+	uint8_t id;
 	int16_t (*get_encoder_count)();
+	int16_t prev_encoder_count;
 	float (*get_current)();
 	uint32_t pos_ch;
 	uint32_t neg_ch;
-	uint8_t id;
 	float current_ewma;
 	float current_ewma_fast;
-	int16_t prev_encoder_count;
 	float set_velocity;
 	float target_velocity;
 	float velocity_ewma;
+	PID gains;
 } Motor;
 
 typedef struct {

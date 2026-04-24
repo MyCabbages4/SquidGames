@@ -15,17 +15,17 @@
 extern float current_limit;
 
 // unsafe way to set motor PWM (this can stall the motor)
-void set_pwm_unsafe(Motor* m, float duty_cycle_percent, TIM_HandleTypeDef* htim3) {
+void set_pwm_unsafe(Motor* m, float duty_cycle_percent, TIM_HandleTypeDef* htim) {
 	int duty_cycle = (int)(duty_cycle_percent * 200);
 //	printf("Setting duty cycle to: %.2f\n\r", duty_cycle);
 //	printf(",duty_cycle:%d", duty_cycle);
 //	printf(",pos_ch:%d,neg_ch:%d\n\r", m->pos_ch, m->neg_ch);
 	if (duty_cycle < 0) {
-		__HAL_TIM_SET_COMPARE(htim3, m->pos_ch, 0);
-		__HAL_TIM_SET_COMPARE(htim3, m->neg_ch, -duty_cycle);
+		__HAL_TIM_SET_COMPARE(htim, m->pos_ch, 0);
+		__HAL_TIM_SET_COMPARE(htim, m->neg_ch, -duty_cycle);
 	} else {
-		__HAL_TIM_SET_COMPARE(htim3, m->pos_ch, duty_cycle);
-		__HAL_TIM_SET_COMPARE(htim3, m->neg_ch, 0);
+		__HAL_TIM_SET_COMPARE(htim, m->pos_ch, duty_cycle);
+		__HAL_TIM_SET_COMPARE(htim, m->neg_ch, 0);
 	}
 }
 
@@ -37,7 +37,7 @@ void update_ewma(Motor* m) {
 }
 
 // set PWM speed but also limit current
-void set_pwm(Motor* m, float duty_cycle_percent, TIM_HandleTypeDef* htim3) {
+void set_pwm(Motor* m, float duty_cycle_percent, TIM_HandleTypeDef* htim) {
 //	printf("Duty Cycle Percent: %f\n\r", duty_cycle_percent);
 	update_ewma(m);
 	// this is essentially a P controller
@@ -51,7 +51,7 @@ void set_pwm(Motor* m, float duty_cycle_percent, TIM_HandleTypeDef* htim3) {
 	// choose the minimum of the 2 as your actual speed
 	// the effect of this is that when we approach the max current, 'current_effort' becomes small, so we slow down the motor
 	float min_magnitude = current_effort < requested_magnitude ? current_effort : requested_magnitude;
-	set_pwm_unsafe(m, sign * min_magnitude, htim3);
+	set_pwm_unsafe(m, sign * min_magnitude, htim);
 }
 
 float pid(Motor* m, float measured, float set_point) {
