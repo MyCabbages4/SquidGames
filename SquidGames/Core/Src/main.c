@@ -129,8 +129,6 @@ void input_handler();
 /* USER CODE BEGIN 0 */
 void control(Motor* m) {
 	float velocity = get_velocity(m);
-//	printf("velocity:%f,encoder:%d\n\r", velocity, m->get_encoder_count());
-//	printf("velocity:%f,Dummy1:0,Dummy2:100\n\r", velocity, m->get_encoder_count());
 	m->target_velocity += min(max(m->set_velocity - m->target_velocity, -MAX_ACCEL), MAX_ACCEL);
 	float duty_cycle = pid(m, velocity, m->target_velocity);
 	set_pwm(m, duty_cycle, &htim3);
@@ -215,8 +213,6 @@ ExploreState explore_update(ExploreState es) {
 	float motor_1_speed = 0.0f, motor_2_speed = 0.0f;
 	update_ewma(&motor_1);
 	update_ewma(&motor_2);
-//	printf("Dummy1:0,Dummy2:1,EWMA1:%f,EWMA2:%f\n\r", motor_1_ewma_limit, motor_2_ewma_limit);
-	printf("Dummy1:0,Dummy2:1,Motor1:%f,Motor2:%f\n\r", motor_1.current_ewma_fast, motor_2.current_ewma_fast);
 	switch (es) {
 	case START_LEFT:
 		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
@@ -230,7 +226,6 @@ ExploreState explore_update(ExploreState es) {
 		es = WAIT;
 		break;
 	case MOVE_LEFT:
-//		printf("Motor 1 EWMA: %.2f\n\r", motor_1.current_ewma_fast);
 		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
 		if (motor_1.current_ewma_fast > motor_1_ewma_limit) {
 			motor_1_speed = 0;
@@ -262,7 +257,6 @@ ExploreState explore_update(ExploreState es) {
 		break;
 	case MOVE_RIGHT:
 		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
-//		printf("Motor 2 EWMA: %.2f\n\r", motor_2.current_ewma_fast);
 		if (motor_2.current_ewma_fast > motor_2_ewma_limit) {
 			motor_1_speed = 0;
 			motor_2_speed = 0;
@@ -308,8 +302,6 @@ static void my_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *c
     uint16_t w = area->x2 - area->x1 + 1;
     uint16_t h = area->y2 - area->y1 + 1;
     uint32_t total_pixels = w * h;
-//    printf("FLUSH: %dx%d at (%d,%d)\n\r", w, h, area->x1, area->y1);
-
 
     // Save the driver pointer for the DMA completion callback
     disp_drv_p = drv;
@@ -333,7 +325,6 @@ static void my_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *c
 
     HAL_StatusTypeDef ret = HAL_SPI_Transmit_DMA(&hspi3, dma_buf, total_pixels * 3);
     if (ret != HAL_OK) {
-//        printf("DMA FAIL: %d, total=%lu\n\r", ret, (unsigned long)(total_pixels * 3));
         LCD_CS_HIGH();
         dma_busy = 0;
         lv_disp_flush_ready(drv);  // unblock LVGL even on failure
@@ -441,7 +432,6 @@ void input_handler() {
 		roll = min(max(roll, -1), 1);
 		pitch = min(max(pitch, -1), 1);
 		joystick_to_motor(-roll, pitch, &motor_1_speed, &motor_2_speed, LEFT_RIGHT);
-				printf("roll: %f, pitch: %f\n\r", -roll, pitch);
 		set_pwm(&motor_1, motor_1_speed * s.speed_mult / 400, &htim3);
 		set_pwm(&motor_2, motor_2_speed * s.speed_mult / 400, &htim3);
 		break;
@@ -559,7 +549,6 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  printf("Hello world\n\r");
   lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x100f0d), LV_PART_MAIN);
   lv_obj_t *splash_view = lv_img_create(lv_scr_act());
   LV_IMG_DECLARE(splash);            // declare the converted image
@@ -584,14 +573,13 @@ int main(void)
 
 	int16_t sx, sy;
 	if (XPT2046_Read(&sx, &sy)) {
-		printf("screen x=%d y=%d \t delta t=%d\r\n", sx, sy, HAL_GetTick() - last_print);
 		last_print = HAL_GetTick();
 	}
 
 	motors_set_values(
 			motor_1.current_ewma, motor_1.velocity_ewma,
 			motor_2.current_ewma, motor_2.velocity_ewma
-			);
+	);
 
 
 	HAL_Delay(5);
