@@ -6,7 +6,6 @@
 #include <stdlib.h>
 
 typedef enum{
-//	"BASIC", "ADV", "PULL", "BLU", "EXP", ""
 	BASIC,
 	ADV,
 	PULL,

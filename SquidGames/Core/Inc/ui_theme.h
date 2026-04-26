@@ -3,7 +3,7 @@
 
 #include "lvgl.h"
 
-/* NERV amber palette */
+/* amber palette */
 #define UI_COL_BG         lv_color_hex(0x000000)
 #define UI_COL_BG_PANEL   lv_color_hex(0x0A0A0A)
 #define UI_COL_BG_SUNKEN  lv_color_hex(0x1A0F00)
